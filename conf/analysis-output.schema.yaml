@@ -1,0 +1,189 @@
+# Analysis Output Schema
+# Represents the results of an LLM-driven energy efficiency analysis of a
+# commercial building: a list of energy conservation measures (ECMs) with
+# savings estimates, aggregate totals, and projected regulatory impact.
+#
+# Building identity and current performance metrics (EUI, benchmark, carbon,
+# compliance status) live in building-profile.schema.yaml and are not
+# repeated here. This schema contains only what the analysis itself produces.
+#
+# Design intent: structured enough to render in reports and feed downstream
+# tools, but flexible enough that the LLM can populate it from conversational
+# reasoning without needing rigid templates for every measure type.
+
+
+# ─── HEADER ──────────────────────────────────────────────────────────────────
+
+building_id: string              # Matches bms-input building.id
+analysis_date: string            # ISO 8601 date
+analyst_notes: string | null     # (optional) Free-text context about this analysis
+
+
+# ─── FACTORS ─────────────────────────────────────────────────────────────────
+# Rates and emission factors used to convert energy savings into cost and
+# carbon savings throughout this analysis. Stated once here so any ECM's
+# arithmetic can be verified: savings.electricity.cost_usd_yr =
+# electricity.kwh_yr × factors.electricity.rate_usd_kwh, etc.
+# Omit a commodity block if the building does not use that fuel.
+
+factors:
+  electricity:
+    rate_usd_kwh: number
+    co2e_tons_per_kwh: number
+
+  gas:                           # (optional)
+    rate_usd_therm: number
+    co2e_tons_per_therm: number
+
+  steam:                         # (optional)
+    rate_usd_mlb: number
+    co2e_tons_per_mlb: number
+
+  sources: [string]              # Citations for the factors above, e.g.:
+                                 # "eGRID 2023 NWPP: 0.000288 tCO2e/kWh"
+                                 # "EPA 40 CFR Part 98: 0.00005311 tCO2e/therm"
+                                 # "Con Ed district steam: 0.00004493 tCO2e/kBtu"
+
+
+# ─── ENERGY CONSERVATION MEASURES ────────────────────────────────────────────
+# Each ECM is a discrete, actionable recommendation with quantified savings.
+# Savings ranges (low/high) are preferred over point estimates where uncertainty
+# is significant. Assumptions must be listed so calculations are auditable.
+
+ecms:
+  - id: string                   # e.g. "ECM-01"
+    name: string                 # Short label, e.g. "Static Pressure Reset"
+    category: string             # One of:
+                                 #   scheduling          — add/fix operating schedules
+                                 #   setpoint_reset      — OAT/load-based resets
+                                 #   controls_sequence   — logic change, no hardware
+                                 #   recommissioning     — restore design intent
+                                 #   equipment_upgrade   — capital replacement
+                                 #   lighting            — lighting controls or retrofits
+                                 #   plug_load           — plug load management
+                                 #   envelope            — insulation, glazing, etc.
+                                 #   other
+
+    description: string          # 2–4 sentences: what, why, how it saves energy
+
+    affected_systems: [string]   # Equipment IDs from the input schema
+
+    assumptions: [string]        # Key inputs and sources used in savings calc.
+                                 # e.g. "FSP 0.65 W/cfm", "HDD65=4,104 (PDX normals)",
+                                 # "boiler efficiency 85%", "fan cube law"
+
+    savings:
+      # Each commodity block groups energy, cost, and carbon together.
+      # Omit a block entirely if the ECM has no effect on that fuel.
+      # range: [low, high] is optional — include when estimate has meaningful uncertainty.
+
+      electricity:
+        kwh_yr: number
+        kwh_yr_range: [number, number] | null
+        cost_usd_yr: number
+        co2e_tons_yr: number
+
+      gas:                       # (optional)
+        therms_yr: number
+        therms_yr_range: [number, number] | null
+        cost_usd_yr: number
+        co2e_tons_yr: number
+
+      steam:                     # (optional)
+        mlb_yr: number
+        mlb_yr_range: [number, number] | null
+        cost_usd_yr: number
+        co2e_tons_yr: number
+
+      total:                     # Cross-commodity sums for convenience
+        cost_usd_yr: number
+        co2e_tons_yr: number
+
+    implementation:
+      capital_cost_usd: number | null     # Null = no-cost / controls-only measure
+      requires_capital: boolean
+      complexity: string                  # low | medium | high
+      payback_years: number | null        # Simple payback (capital / annual savings)
+      notes: string | null               # Constraints, sequencing dependencies, etc.
+
+    priority: string             # high | medium | low
+    confidence: string           # Savings estimate quality: high | medium | low
+                                 # high   = measured data, well-established method
+                                 # medium = estimated from BMS observations + typical values
+                                 # low    = rough order-of-magnitude, needs field verification
+
+
+# ─── AGGREGATE TOTALS ────────────────────────────────────────────────────────
+# Sum across all ECMs. Used for executive summary and percent-savings reporting.
+
+totals:
+  electricity:
+    kwh_yr: number
+    cost_usd_yr: number
+    co2e_tons_yr: number
+    pct_of_baseline: number      # Fraction of building's annual electricity baseline
+
+  gas:                           # (optional) omit if building has no gas
+    therms_yr: number
+    cost_usd_yr: number
+    co2e_tons_yr: number
+    pct_of_baseline: number
+
+  steam:                         # (optional) omit if building has no steam
+    mlb_yr: number
+    cost_usd_yr: number
+    co2e_tons_yr: number
+    pct_of_baseline: number
+
+  total:
+    cost_usd_yr: number
+    co2e_tons_yr: number
+    pct_cost_of_baseline: number
+    pct_co2e_of_baseline: number
+
+  # Capital summary (no-cost measures excluded from payback calc)
+  total_capital_usd: number | null
+  aggregate_payback_years: number | null   # total capital / total annual savings
+
+  # ECM count by category (for quick profile of recommendation set)
+  ecm_count_by_category:
+    scheduling: number
+    setpoint_reset: number
+    controls_sequence: number
+    recommissioning: number
+    equipment_upgrade: number
+    other: number
+
+
+# ─── NARRATIVE ───────────────────────────────────────────────────────────────
+# Free-text summary fields for report generation and executive communication.
+
+# ─── REGULATORY IMPACT ───────────────────────────────────────────────────────
+# Projected compliance status after implementing ECMs — the analysis-specific
+# counterpart to the current compliance status in the building profile.
+# Only include jurisdictions where the building has an active obligation.
+
+regulatory_impact:
+  - jurisdiction: string
+    law: string
+    periods:
+      - label: string
+        baseline_co2e_tons: number         # Current emissions (from building profile)
+        projected_co2e_tons: number        # After all recommended ECMs
+        co2e_reduction_tons: number
+        cap_co2e_tons: number              # Unchanged — restated here for readability
+        projected_compliant: boolean
+        projected_penalty_usd_yr: number | null
+
+
+# ─── NARRATIVE ───────────────────────────────────────────────────────────────
+# Free-text summary fields for report generation and executive communication.
+
+key_findings: [string]           # 3–5 bullets: most important observations
+                                 # e.g. "Boiler firing at 19% with 0% VAV heat demand"
+
+priority_actions: [string]       # Top 3–5 recommended next steps, ordered by impact/ease
+
+open_questions: [string]         # (optional) Data gaps or follow-up needed to refine estimates
+                                 # e.g. "Confirm actual fan kW from VFD nameplate"
+                                 # e.g. "Verify OA fraction at minimum position"
