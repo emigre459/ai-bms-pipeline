@@ -27,7 +27,7 @@ timestamp: string                # ISO 8601, e.g. "2024-10-15T14:30:00-05:00"
 conditions:
   oat_f: number                  # Outdoor air temperature (°F)
   rh_pct: number | null          # (optional) Outdoor relative humidity (%)
-  season: string | null          # (optional) heating | cooling | shoulder
+  season: string | null          # (optional) heating | cooling | shoulder based on summer, winter, or shoulder seasons (spring or fall)
 
 
 # ─── AIR SYSTEMS ─────────────────────────────────────────────────────────────
@@ -50,8 +50,8 @@ air_systems:
         status: string           # on | off | fault
         vfd_pct: number | null   # Speed command (%)
 
-      sa_static_pressure_actual_inwc: number | null
-      sa_static_pressure_setpoint_inwc: number | null  # As currently programmed in BAS
+    sa_static_pressure_actual_inwc: number | null
+    sa_static_pressure_setpoint_inwc: number | null  # As currently programmed in BAS
 
     temperatures:
       supply_air_actual_f: number | null
