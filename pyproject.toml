@@ -1,5 +1,5 @@
 [project]
-name = "gridium-bms-ai-pipeline"
+name = "ai-bms-pipeline"
 version = "0.1.0"
 description = "Pipeline for using AI tools to process data from Building Management Systems (BMS) in order to derive energy efficiency insights quickly."
 readme = "README.md"
