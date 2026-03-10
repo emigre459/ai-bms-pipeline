@@ -1,5 +1,5 @@
 """
-gridium_bms_ai_pipeline
+ai_bms_pipeline
 
 Core library package for working with Building Management Systems (BMS) data
 and deriving energy efficiency insights.

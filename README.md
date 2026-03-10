@@ -1,7 +1,5 @@
 # Purpose
 
-This is a takehome project from Gridium for the hiring process of Founding AI Engineer. The idea is that I'd be working with one of Gridium's founders (Adam Stein) to build out a new AI-powered product as a spin-out of the existing company (or potentially merge it back into the main product offering...unclear).
-
 > In this exercise, you will build a prototype pipeline that ingests screenshots from real BMS interfaces, extracts structured information, and uses that information to identify potential energy efficiency opportunities.
 
 # Getting Started
