@@ -1,0 +1,25 @@
+name: black
+on:
+    push:
+        branches:
+            - main
+    pull_request:
+jobs:
+    black:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - name: Read Python version
+              id: python-version
+              run: echo "value=$(cat .python-version)" >> $GITHUB_OUTPUT
+            - name: Setup python
+              id: setup-python
+              uses: actions/setup-python@v5
+              with:
+                python-version: ${{ steps.python-version.outputs.value }}
+            - name: Install uv
+              uses: astral-sh/setup-uv@v7
+            - name: Make the environment
+              run: make env_create
+            - name: Run black check
+              run: make black_check

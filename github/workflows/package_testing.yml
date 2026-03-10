@@ -1,0 +1,33 @@
+name: package_testing
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+env:
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+jobs:
+  package_tests:
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout actions
+        uses: actions/checkout@v4
+      - name: Read Python version
+        id: python-version
+        run: echo "value=$(cat .python-version)" >> $GITHUB_OUTPUT
+      - name: Setup python
+        id: setup-python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ steps.python-version.outputs.value }}
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+      - name: Make the environment
+        run: uv sync
+      - name: Run tests
+        run: uv run pytest -v --tb=short -n auto
