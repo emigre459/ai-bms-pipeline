@@ -9,7 +9,7 @@ env_create:
 
 ## Run black on key folders
 black:
-	@poetry run black tests/ src/ scripts/
+	@uv run black tests/ src/ scripts/
 
 ## Run black in check mode
 black_check:
