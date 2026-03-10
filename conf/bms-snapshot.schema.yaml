@@ -4,16 +4,13 @@
 # through BMS screens — actuals vs. setpoints, operating modes, demand
 # signals, and anything that looks out of place.
 #
-# References building_id to link to the stable facts in building-profile.schema.yaml.
-# Equipment IDs (air_systems[].id, etc.) must match those in the profile.
-#
 # Types: string, number, boolean, null, [type] = array of type
 # Fields marked (optional) may be omitted when data is unavailable.
 
 
 # ─── HEADER ──────────────────────────────────────────────────────────────────
 
-building_id: string              # Matches building.id in building-profile.schema.yaml
+building_id: string              
 timestamp: string                # ISO 8601, e.g. "2024-10-15T14:30:00-05:00"
 
 
@@ -31,13 +28,12 @@ conditions:
 
 
 # ─── AIR SYSTEMS ─────────────────────────────────────────────────────────────
-# Current state of each air-handling system. One entry per unit; id must
-# match an entry in building-profile air_systems[].
+# Current state of each air-handling system. One entry per unit.
 # For parallel fan arrays, list each physical fan in fans[] so that speed
 # imbalances between units sharing a plenum are visible.
 
 air_systems:
-  - id: string                   # Must match building profile equipment tag
+  - id: string                   
 
     mode: string                 # occupied | unoccupied | override | off
     out_of_schedule: boolean     # True if running outside its designed_schedule

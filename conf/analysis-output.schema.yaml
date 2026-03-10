@@ -3,10 +3,6 @@
 # commercial building: a list of energy conservation measures (ECMs) with
 # savings estimates, aggregate totals, and projected regulatory impact.
 #
-# Building identity and current performance metrics (EUI, benchmark, carbon,
-# compliance status) live in building-profile.schema.yaml and are not
-# repeated here. This schema contains only what the analysis itself produces.
-#
 # Design intent: structured enough to render in reports and feed downstream
 # tools, but flexible enough that the LLM can populate it from conversational
 # reasoning without needing rigid templates for every measure type.
@@ -14,7 +10,7 @@
 
 # ─── HEADER ──────────────────────────────────────────────────────────────────
 
-building_id: string              # Matches bms-input building.id
+building_id: string              # Matches bms-snapshot building.id
 analysis_date: string            # ISO 8601 date
 analyst_notes: string | null     # (optional) Free-text context about this analysis
 
