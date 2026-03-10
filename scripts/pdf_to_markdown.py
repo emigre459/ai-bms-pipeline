@@ -6,7 +6,11 @@ from pathlib import Path
 
 import pymupdf4llm
 
-DEFAULT_PDF = Path(__file__).resolve().parent.parent / "references" / "AI Engineer Take-Home Exercise.pdf"
+DEFAULT_PDF = (
+    Path(__file__).resolve().parent.parent
+    / "references"
+    / "AI Engineer Take-Home Exercise.pdf"
+)
 
 
 def main() -> None:

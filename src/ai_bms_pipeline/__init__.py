@@ -6,4 +6,3 @@ and deriving energy efficiency insights.
 """
 
 __all__ = []
-
