@@ -10,8 +10,8 @@
 
 # ─── HEADER ──────────────────────────────────────────────────────────────────
 
-building_id: string              # Matches bms-snapshot building.id
-analysis_date: string            # ISO 8601 date
+building_id: string              # Required; must not be null; Matches bms-snapshot building.id
+analysis_date: string            # ISO 8601 date, date when this analysis was generated, should be deterministic
 analyst_notes: string | null     # (optional) Free-text context about this analysis
 
 
@@ -75,19 +75,19 @@ ecms:
 
       electricity:
         kwh_yr: number
-        kwh_yr_range: [number, number] | null
+        kwh_yr_range: "[number, number] | null"
         cost_usd_yr: number
         co2e_tons_yr: number
 
       gas:                       # (optional)
         therms_yr: number
-        therms_yr_range: [number, number] | null
+        therms_yr_range: "[number, number] | null"
         cost_usd_yr: number
         co2e_tons_yr: number
 
       steam:                     # (optional)
         mlb_yr: number
-        mlb_yr_range: [number, number] | null
+        mlb_yr_range: "[number, number] | null"
         cost_usd_yr: number
         co2e_tons_yr: number
 

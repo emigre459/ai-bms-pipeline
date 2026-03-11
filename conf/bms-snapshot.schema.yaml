@@ -33,122 +33,93 @@ conditions:                          # May be null if entirely unavailable
 # For parallel fan arrays, list each physical fan in fans[] so that speed
 # imbalances between units sharing a plenum are visible.
 
-air_systems: [                       # May be null if there are no air systems found
-  null |
-  {
-    id: string                       # Required within air system; must not be null
+air_systems:                         # May be null if there are no air systems found
+  - id: string                       # Required within air system; must not be null
 
     mode: string | null              # occupied | unoccupied | override | off
     out_of_schedule: boolean | null  # True if running outside its designed_schedule; null if unknown
     control_source: string | null    # BAS | local | manual
 
-    fans: [
-      null |
-      {
-        id: string                  # Required within fan; must not be null
-        role: string | null         # supply | return | exhaust | relief
-        status: string | null       # on | off | fault
-        vfd_pct: number | null      # Speed command (%)
-      }
-    ] | null                        # If no fans present, may be null
+    fans:                            # If no fans present, may be null
+      - id: string                   # Required within fan; must not be null
+        role: string | null          # supply | return | exhaust | relief
+        status: string | null        # on | off | fault
+        vfd_pct: number | null       # Speed command (%)
 
     sa_static_pressure_actual_inwc: number | null
     sa_static_pressure_setpoint_inwc: number | null
 
-    temperatures: null | {
+    temperatures:
       supply_air_actual_f: number | null
       supply_air_setpoint_f: number | null
       return_air_f: number | null
       discharge_air_f: number | null
-    }
 
-    economizer: null | {
+    economizer:
       active: boolean | null               # true/false if known; null if unknown
       position_pct: number | null
-    }
 
     vav_demand_pct: number | null
-    overrides: [string] | null             # May be null if no overrides present
+    overrides: "[string] | null"           # May be null if no overrides present
     notes: string | null
-  }
-] 
 
 
 # ─── HEATING PLANT ───────────────────────────────────────────────────────────
 # Current state of the heating plant. For district steam, boilers[] is omitted.
 
-heating_plant: null | {
+heating_plant:
 
-  boilers: [                              # May be null if district steam or unavailable
-    null |
-    {
-      id: string                          # Required within boiler; must not be null
-      status: string | null               # on | off | standby
+  boilers:                              # May be null if district steam or unavailable
+    - id: string                        # Required within boiler; must not be null
+      status: string | null             # on | off | standby
       firing_rate_pct: number | null
       outlet_temp_f: number | null
       runtime_hrs: number | null
       cycle_count: number | null
-    }
-  ] | null
 
   hws_temp_actual_f: number | null
   hws_temp_setpoint_f: number | null
 
-  hws_oat_reset_active: null | {
+  hws_oat_reset_active:
     oat_min_f: number | null
     oat_max_f: number | null
     hws_min_f: number | null
     hws_max_f: number | null
-  }
 
   vav_heat_request_pct: number | null
-}
 
 
 # ─── COOLING PLANT ───────────────────────────────────────────────────────────
 
-cooling_plant: null | {
+cooling_plant:
   chws_temp_actual_f: number | null
   chws_temp_setpoint_f: number | null
   oat_reset_active: boolean | null
 
-  units: [                              # May be null if no cooling units present
-    null |
-    {
-      id: string                        # Required within cooling unit; must not be null
-      status: string | null             # on | off | standby
+  units:                               # May be null if no cooling units present
+    - id: string                       # Required within cooling unit; must not be null
+      status: string | null            # on | off | standby
       current_load_pct: number | null
       efficiency_kw_per_ton: number | null
-    }
-  ] | null
-}
 
 
 # ─── VAV ZONES ───────────────────────────────────────────────────────────────
 # Optional. Include when zone-level data is available and relevant.
 
-zones: [                                # May be null if no zones found
-  null |
-  {
-    id: string                          # Required within zone; must not be null
+zones:                                  # May be null if no zones found
+  - id: string                          # Required within zone; must not be null
     name: string | null
     space_temp_actual_f: number | null
     space_temp_setpoint_f: number | null
     damper_position_pct: number | null
     reheat_active: boolean | null
     notes: string | null
-  }
-] | null
 
 
 # ─── ANOMALIES ───────────────────────────────────────────────────────────────
 # Pre-flagged observations to direct the LLM's attention.
 
-anomalies: [                            # May be null if no anomalies detected
-  null |
-  {
-    system_id: string                   # Required within anomalies; must not be null
+anomalies:                              # May be null if no anomalies detected
+  - system_id: string                   # Required within anomalies; must not be null
     description: string | null
     severity: string | null             # info | warning | critical
-  }
-] | null
