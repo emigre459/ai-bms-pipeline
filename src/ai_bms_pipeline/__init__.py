@@ -5,4 +5,6 @@ Core library package for working with Building Management Systems (BMS) data
 and deriving energy efficiency insights.
 """
 
-__all__ = []
+from . import image_ingest
+
+__all__ = ["image_ingest"]

@@ -1,6 +1,8 @@
+.PHONY: tests env_create black black_check pr_check
+
 ## Run pytest with uv package manager to see how tests go
 tests:
-	uv run pytest -v --tb=short -n auto
+	@uv run pytest -v --tb=short -n auto
 
 ## Set up python interpreter environment
 env_create:
@@ -16,4 +18,4 @@ black_check:
 	@uv run black --check tests/ src/ scripts/
 
 ## Test to run to ensure PR readiness
-pr_check: black black_check tests
+pr_check: black tests

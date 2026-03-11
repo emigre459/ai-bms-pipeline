@@ -6,11 +6,11 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "anthropic>=0.84.0",
-    "black>=26.3.0",
     "pandas>=3.0.1",
     "pillow>=12.1.1",
     "pydantic>=2.12.5",
     "pymupdf4llm>=0.0.20",
+    "python-dotenv>=1.2.2",
 ]
 
 [build-system]
@@ -19,10 +19,16 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "black>=26.3.0",
     "pytest>=9.0.0",
+    "pytest-env>=1.5.0",
     "pytest-xdist>=3.6.1",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+env_files = [".env"]
 addopts = "-n auto"
+markers = [
+    "integration: marks tests that call live external APIs",
+]
