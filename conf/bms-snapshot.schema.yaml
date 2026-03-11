@@ -25,7 +25,7 @@ timestamp: string                    # Required; ISO 8601; must not be null (e.g
 conditions:                          # May be null if entirely unavailable
   oat_f: number | null               # Outdoor air temperature (°F), may be null if unknown
   rh_pct: number | null              # Outdoor relative humidity (%)
-  season: string | null              # heating | cooling | shoulder (March-May, Sept-Nov) or null
+  season: string | null              # heating (winter) | cooling (summer) | shoulder (March-May, Sept-Nov) or null
 
 
 # ─── AIR SYSTEMS ─────────────────────────────────────────────────────────────
