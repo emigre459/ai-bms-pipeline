@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv run:*)",
+      "Read(//Users/davemcrench/**)",
+      "Bash(cat /Users/davemcrench/Projects/gridium-bms-ai-pipeline/.env*)"
+    ]
+  }
+}

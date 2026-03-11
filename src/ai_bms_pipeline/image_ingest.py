@@ -1,6 +1,4 @@
-"""
-Image ingestion utilities for BMS screenshot analysis with Anthropic.
-"""
+"""Image ingestion utilities for BMS screenshot analysis with Anthropic."""
 
 from __future__ import annotations
 
@@ -8,13 +6,17 @@ import base64
 import json
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import anthropic
 from PIL import Image
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+
+from ai_bms_pipeline.config import MAX_CONCURRENT_LLM_TASKS
 
 ALLOWED_EXTENSIONS: tuple[str, ...] = (".jpeg", ".jpg", ".png", ".webp")
 MEDIA_TYPES_BY_EXTENSION: dict[str, str] = {
@@ -33,14 +35,14 @@ class Conditions(BaseModel):
     model_config = ConfigDict(extra="forbid")
     oat_f: Optional[float] = None
     rh_pct: Optional[float] = None
-    season: Optional[str] = None
+    season: Optional[Literal["heating", "cooling", "shoulder"]] = None
 
 
 class Fan(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str
-    role: str
-    status: str
+    role: Optional[Literal["supply", "return", "exhaust", "relief"]] = None
+    status: Optional[Literal["on", "off", "fault"]] = None
     vfd_pct: Optional[float] = None
 
 
@@ -54,30 +56,30 @@ class Temperatures(BaseModel):
 
 class Economizer(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    active: bool
+    active: Optional[bool] = None
     position_pct: Optional[float] = None
 
 
 class AirSystem(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str
-    mode: str
-    out_of_schedule: bool
-    control_source: str
-    fans: list[Fan] = Field(default_factory=list)
+    mode: Optional[Literal["occupied", "unoccupied", "override", "off"]] = None
+    out_of_schedule: Optional[bool] = None
+    control_source: Optional[Literal["BAS", "local", "manual"]] = None
+    fans: Optional[list[Fan]] = None
     sa_static_pressure_actual_inwc: Optional[float] = None
     sa_static_pressure_setpoint_inwc: Optional[float] = None
     temperatures: Temperatures
     economizer: Economizer
     vav_demand_pct: Optional[float] = None
-    overrides: list[str] = Field(default_factory=list)
+    overrides: Optional[list[str]] = None
     notes: Optional[str] = None
 
 
 class Boiler(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str
-    status: str
+    status: Optional[Literal["on", "off", "standby"]] = None
     firing_rate_pct: Optional[float] = None
     outlet_temp_f: Optional[float] = None
     runtime_hrs: Optional[float] = None
@@ -104,7 +106,7 @@ class HeatingPlant(BaseModel):
 class CoolingUnit(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str
-    status: str
+    status: Optional[Literal["on", "off", "standby"]] = None
     current_load_pct: Optional[float] = None
     efficiency_kw_per_ton: Optional[float] = None
 
@@ -131,8 +133,8 @@ class Zone(BaseModel):
 class Anomaly(BaseModel):
     model_config = ConfigDict(extra="forbid")
     system_id: str
-    description: str
-    severity: str
+    description: Optional[str] = None
+    severity: Optional[Literal["info", "warning", "critical"]] = None
 
 
 class BmsSnapshot(BaseModel):
@@ -140,11 +142,17 @@ class BmsSnapshot(BaseModel):
     building_id: str
     timestamp: str
     conditions: Conditions
-    air_systems: list[AirSystem] = Field(default_factory=list)
+    air_systems: Optional[list[AirSystem]] = None
     heating_plant: HeatingPlant
     cooling_plant: CoolingPlant
     zones: Optional[list[Zone]] = None
-    anomalies: list[Anomaly] = Field(default_factory=list)
+    anomalies: Optional[list[Anomaly]] = None
+
+    @field_validator("timestamp")
+    @classmethod
+    def _validate_timestamp_has_timezone(cls, value: str) -> str:
+        _parse_timezone_aware_timestamp(value)
+        return value
 
 
 class BmsScreenshotCheck(BaseModel):
@@ -170,83 +178,81 @@ def _load_schema_text(schema_path: Path | str | None = None) -> str:
 def _extract_yaml_top_level_fields(schema_text: str) -> list[str]:
     fields: list[str] = []
     for raw_line in schema_text.splitlines():
-        line = raw_line.split("#", 1)[0].rstrip()
-        if not line:
-            continue
         if raw_line.startswith(" ") or raw_line.startswith("\t"):
             continue
-        if ":" in line:
-            key = line.split(":", 1)[0].strip()
-            if key and key not in fields:
-                fields.append(key)
+        code = raw_line.split("#", 1)[0].strip()
+        if not code or ":" not in code:
+            continue
+        key = code.split(":", 1)[0].strip()
+        if key and key not in fields:
+            fields.append(key)
     return fields
 
 
 def _schema_type_token_to_json_type(token: str) -> str:
-    mapping = {
+    return {
         "string": "string",
         "number": "number",
         "boolean": "boolean",
         "null": "null",
-    }
-    return mapping.get(token.strip(), "string")
+    }.get(token.strip(), "string")
 
 
 def _type_expression_to_schema(type_expr: str) -> dict[str, Any]:
-    expr = type_expr.strip()
+    expr = type_expr.strip().strip('"')
     if expr.startswith("[") and expr.endswith("]"):
-        inner = expr[1:-1].strip()
         return {
             "type": "array",
-            "items": _type_expression_to_schema(inner),
+            "items": _type_expression_to_schema(expr[1:-1].strip()),
         }
+    tokens = [t.strip() for t in expr.split("|") if t.strip()]
+    if len(tokens) <= 1:
+        return {"type": _schema_type_token_to_json_type(expr)}
+    json_types = list(dict.fromkeys(_schema_type_token_to_json_type(t) for t in tokens))
+    return {"type": json_types if len(json_types) > 1 else json_types[0]}
 
-    if "|" in expr:
-        tokens = [t.strip() for t in expr.split("|") if t.strip()]
-        json_types = [_schema_type_token_to_json_type(t) for t in tokens]
-        unique = list(dict.fromkeys(json_types))
-        if len(unique) == 1:
-            return {"type": unique[0]}
-        return {"type": unique}
 
-    return {"type": _schema_type_token_to_json_type(expr)}
+def _enum_from_comment(comment: str | None) -> list[str] | None:
+    if not comment or "|" not in comment:
+        return None
+    prefix = comment.split("or null", 1)[0]
+    prefix = prefix.split("if unknown", 1)[0]
+    prefix = re.sub(r"\([^)]*\)", "", prefix)
+    raw_tokens = [t.strip() for t in prefix.split("|")]
+    tokens: list[str] = []
+    for token in raw_tokens:
+        cleaned = re.sub(r"[^A-Za-z0-9_\-]", "", token)
+        if not cleaned:
+            continue
+        if cleaned.lower() in {"string", "number", "boolean", "null"}:
+            continue
+        tokens.append(cleaned)
+    if len(tokens) < 2:
+        return None
+    return tokens
 
 
 def _schema_lines(schema_text: str) -> list[dict[str, Any]]:
     parsed: list[dict[str, Any]] = []
     for raw_line in schema_text.splitlines():
-        stripped = raw_line.split("#", 1)[0].rstrip()
-        if not stripped.strip():
+        raw_no_newline = raw_line.rstrip()
+        if not raw_no_newline.strip() or raw_no_newline.strip().startswith("#"):
             continue
         indent = len(raw_line) - len(raw_line.lstrip(" "))
+        parts = raw_no_newline.split("#", 1)
+        code = parts[0].rstrip()
+        if not code.strip():
+            continue
+        comment = parts[1].strip() if len(parts) > 1 else None
         parsed.append(
             {
                 "indent": indent,
-                "text": stripped.strip(),
+                "text": code.strip(),
+                "comment": comment,
                 "optional": "(optional)" in raw_line.lower(),
             }
         )
     return parsed
-
-
-def _merge_object_schema(
-    base: dict[str, Any] | None,
-    new: dict[str, Any],
-) -> dict[str, Any]:
-    if not base:
-        return new
-    if base.get("type") != "object" or new.get("type") != "object":
-        return base
-    base_props = base.setdefault("properties", {})
-    base_required = set(base.get("required", []))
-    for key, value in new.get("properties", {}).items():
-        if key not in base_props:
-            base_props[key] = value
-    for key in new.get("required", []):
-        base_required.add(key)
-    if base_required:
-        base["required"] = sorted(base_required)
-    return base
 
 
 def _parse_object_schema(
@@ -262,6 +268,7 @@ def _parse_object_schema(
         line = lines[idx]
         line_indent = int(line["indent"])
         text = str(line["text"])
+        comment = str(line["comment"]) if line["comment"] else None
         optional = bool(line["optional"])
 
         if line_indent < indent:
@@ -269,9 +276,7 @@ def _parse_object_schema(
         if line_indent > indent:
             idx += 1
             continue
-        if text.startswith("- "):
-            break
-        if ":" not in text:
+        if text.startswith("- ") or ":" not in text:
             idx += 1
             continue
 
@@ -282,41 +287,52 @@ def _parse_object_schema(
 
         if value:
             field_schema = _type_expression_to_schema(value)
-        else:
-            if idx < len(lines) and int(lines[idx]["indent"]) > indent:
-                nested_indent = int(lines[idx]["indent"])
-                nested_text = str(lines[idx]["text"])
-                if nested_text.startswith("- "):
-                    field_schema, idx = _parse_array_schema(
-                        lines=lines,
-                        start=idx,
-                        indent=nested_indent,
-                    )
-                else:
-                    field_schema, idx = _parse_object_schema(
-                        lines=lines,
-                        start=idx,
-                        indent=nested_indent,
-                    )
+        elif idx < len(lines) and int(lines[idx]["indent"]) > indent:
+            nested_indent = int(lines[idx]["indent"])
+            if str(lines[idx]["text"]).startswith("- "):
+                field_schema, idx = _parse_array_schema(lines, idx, nested_indent)
             else:
+                field_schema, idx = _parse_object_schema(lines, idx, nested_indent)
+        else:
+            field_schema = {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            }
+
+        enum_values = _enum_from_comment(comment)
+        if enum_values and (
+            field_schema.get("type") == "string"
+            or (
+                isinstance(field_schema.get("type"), list)
+                and "string" in field_schema["type"]
+            )
+        ):
+            if (
+                isinstance(field_schema.get("type"), list)
+                and "null" in field_schema["type"]
+            ):
                 field_schema = {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False,
+                    "anyOf": [
+                        {"type": "string", "enum": list(enum_values)},
+                        {"type": "null"},
+                    ]
                 }
+            else:
+                field_schema["enum"] = list(enum_values)
 
         properties[key] = field_schema
-        if not optional:
+        if not optional and "null" not in str(field_schema.get("type")):
             required.append(key)
 
-    object_schema: dict[str, Any] = {
+    out: dict[str, Any] = {
         "type": "object",
         "properties": properties,
         "additionalProperties": False,
     }
     if required:
-        object_schema["required"] = required
-    return object_schema, idx
+        out["required"] = required
+    return out, idx
 
 
 def _parse_array_schema(
@@ -325,95 +341,52 @@ def _parse_array_schema(
     indent: int,
 ) -> tuple[dict[str, Any], int]:
     idx = start
-    item_schema: dict[str, Any] | None = None
-
+    item_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
     while idx < len(lines):
         line = lines[idx]
-        line_indent = int(line["indent"])
-        text = str(line["text"])
-
-        if line_indent < indent:
+        if int(line["indent"]) < indent:
             break
-        if line_indent != indent or not text.startswith("- "):
+        if int(line["indent"]) != indent or not str(line["text"]).startswith("- "):
             break
-
-        rest = text[2:].strip()
+        first = str(line["text"])[2:].strip()
         idx += 1
-
-        if rest:
-            if ":" in rest:
-                key, raw_value = rest.split(":", 1)
-                key = key.strip()
-                value = raw_value.strip()
-                first_field_schema = (
-                    _type_expression_to_schema(value)
-                    if value
-                    else {
-                        "type": "object",
-                        "properties": {},
-                        "additionalProperties": False,
-                    }
-                )
-                candidate_item = {
-                    "type": "object",
-                    "properties": {key: first_field_schema},
-                    "required": [key],
-                    "additionalProperties": False,
-                }
-                if idx < len(lines) and int(lines[idx]["indent"]) > indent:
-                    nested_schema, idx = _parse_object_schema(
-                        lines=lines,
-                        start=idx,
-                        indent=int(lines[idx]["indent"]),
-                    )
-                    candidate_item = _merge_object_schema(candidate_item, nested_schema)
-                item_schema = _merge_object_schema(item_schema, candidate_item)
-            else:
-                item_schema = _type_expression_to_schema(rest)
-        else:
-            if idx < len(lines) and int(lines[idx]["indent"]) > indent:
-                nested_schema, idx = _parse_object_schema(
-                    lines=lines,
-                    start=idx,
-                    indent=int(lines[idx]["indent"]),
-                )
-                item_schema = _merge_object_schema(item_schema, nested_schema)
-            else:
-                item_schema = item_schema or {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False,
-                }
-
-    if item_schema is None:
-        item_schema = {
-            "type": "object",
-            "properties": {},
-            "additionalProperties": False,
-        }
+        if first and ":" in first:
+            key, value = first.split(":", 1)
+            key = key.strip()
+            value = value.strip()
+            item_schema["properties"][key] = (
+                _type_expression_to_schema(value) if value else {"type": "string"}
+            )
+            item_schema.setdefault("required", []).append(key)
+        if idx < len(lines) and int(lines[idx]["indent"]) > indent:
+            nested, idx = _parse_object_schema(lines, idx, int(lines[idx]["indent"]))
+            item_schema["properties"].update(nested.get("properties", {}))
+            item_schema.setdefault("required", []).extend(nested.get("required", []))
+    if item_schema.get("required"):
+        item_schema["required"] = sorted(set(item_schema["required"]))
     return {"type": "array", "items": item_schema}, idx
 
 
 def yaml_to_anthropic_json_schema(
     schema_path: Path | str | None = None,
 ) -> dict[str, Any]:
-    """
-    Convert schema YAML text into Anthropic-compatible JSON Schema.
-    """
-    schema_text = _load_schema_text(schema_path)
-    lines = _schema_lines(schema_text)
-    root_schema, _ = _parse_object_schema(lines=lines, start=0, indent=0)
-    if not root_schema.get("properties"):
+    lines = _schema_lines(_load_schema_text(schema_path))
+    root, _ = _parse_object_schema(lines, 0, 0)
+    if not root.get("properties"):
         raise ValueError("Parsed YAML schema has no top-level properties.")
-    return root_schema
+    _require_all_object_properties(root)
+    return root
 
 
 def media_type_for_path(path: str | Path) -> str:
     suffix = Path(path).suffix.lower()
     if suffix not in MEDIA_TYPES_BY_EXTENSION:
         raise ValueError(
-            f"Unsupported image extension '{suffix}'. "
-            f"Supported: {', '.join(ALLOWED_EXTENSIONS)}"
+            f"Unsupported image extension '{suffix}'. Supported: {', '.join(ALLOWED_EXTENSIONS)}"
         )
     return MEDIA_TYPES_BY_EXTENSION[suffix]
 
@@ -427,27 +400,23 @@ def list_image_paths(
         ext.lower() if ext.startswith(".") else f".{ext.lower()}"
         for ext in (extensions or ALLOWED_EXTENSIONS)
     }
-    paths = [p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in allowed]
-    return sorted(paths)
+    return sorted(
+        [p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in allowed]
+    )
 
 
 def derive_building_id_hint(
-    image_path: str | Path,
-    image_root: str | Path | None = None,
+    image_path: str | Path, image_root: str | Path | None = None
 ) -> str:
     path = Path(image_path)
     if image_root is None:
         return path.stem
     root = Path(image_root).resolve()
-    resolved = path.resolve()
     try:
-        rel = resolved.relative_to(root)
+        rel = path.resolve().relative_to(root)
     except ValueError:
         return path.stem
-    parts = rel.parts
-    if len(parts) >= 2:
-        return parts[0]
-    return path.stem
+    return rel.parts[0] if len(rel.parts) >= 2 else path.stem
 
 
 def _get_client(client: anthropic.Anthropic | None = None) -> anthropic.Anthropic:
@@ -465,20 +434,19 @@ def _resize_if_needed(image: Image.Image) -> Image.Image:
     pixels = width * height
     if long_edge <= MAX_LONG_EDGE_PX and pixels <= MAX_IMAGE_PIXELS:
         return image
-
-    scale_long = min(1.0, MAX_LONG_EDGE_PX / float(long_edge))
-    scale_pixels = min(1.0, (MAX_IMAGE_PIXELS / float(pixels)) ** 0.5)
-    scale = min(scale_long, scale_pixels)
-    new_width = max(1, int(width * scale))
-    new_height = max(1, int(height * scale))
-    return image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+    scale = min(
+        MAX_LONG_EDGE_PX / float(long_edge), (MAX_IMAGE_PIXELS / float(pixels)) ** 0.5
+    )
+    return image.resize(
+        (max(1, int(width * scale)), max(1, int(height * scale))),
+        Image.Resampling.LANCZOS,
+    )
 
 
 def _encode_image_for_api(image_path: str | Path) -> tuple[str, str]:
     path = Path(image_path)
     media_type = media_type_for_path(path)
     suffix = path.suffix.lower()
-
     with Image.open(path) as img:
         processed = _resize_if_needed(img)
         if suffix in {".jpeg", ".jpg"} and processed.mode not in {"RGB", "L"}:
@@ -490,129 +458,63 @@ def _encode_image_for_api(image_path: str | Path) -> tuple[str, str]:
             processed.save(output, format="PNG", optimize=True)
         elif suffix == ".webp":
             processed.save(output, format="WEBP", quality=90)
-        else:
-            raise ValueError(f"Unsupported extension: {suffix}")
-
-    data = base64.b64encode(output.getvalue()).decode("utf-8")
-    return media_type, data
+    return media_type, base64.b64encode(output.getvalue()).decode("utf-8")
 
 
 def _extract_json_from_response(response: Any) -> dict[str, Any]:
-    def _parse_json_object_from_text(text: str) -> dict[str, Any] | None:
-        stripped = text.strip()
-        if not stripped:
-            return None
-
-        try:
-            parsed = json.loads(stripped)
-            if isinstance(parsed, dict):
-                return parsed
-        except json.JSONDecodeError:
-            pass
-
-        fence_pattern = re.compile(
-            r"```(?:json)?\s*(\{[\s\S]*?\})\s*```",
-            re.IGNORECASE,
-        )
-        for match in fence_pattern.finditer(text):
-            candidate = match.group(1).strip()
-            try:
-                parsed = json.loads(candidate)
-                if isinstance(parsed, dict):
-                    return parsed
-            except json.JSONDecodeError:
-                continue
-
-        decoder = json.JSONDecoder()
-        for index, char in enumerate(text):
-            if char != "{":
-                continue
-            try:
-                parsed, _ = decoder.raw_decode(text[index:])
-                if isinstance(parsed, dict):
-                    return parsed
-            except json.JSONDecodeError:
-                continue
-        return None
-
     for block in getattr(response, "content", []):
         if hasattr(block, "input") and isinstance(block.input, dict):
             return block.input
-        if hasattr(block, "json") and isinstance(block.json, dict):
+        elif hasattr(block, "json") and isinstance(block.json, dict):
             return block.json
-        text = getattr(block, "text", None)
-        if isinstance(text, str):
-            parsed = _parse_json_object_from_text(text)
-            if parsed is not None:
-                return parsed
-    raise ValueError("Anthropic response did not contain parseable JSON content.")
+        elif hasattr(block, "text") and isinstance(block.text, str):
+            text_value = block.text.strip()
+            if text_value.startswith("{") and text_value.endswith("}"):
+                parsed = json.loads(text_value)
+                if isinstance(parsed, dict):
+                    return parsed
+    raise ValueError("Structured JSON object not present in response content.")
 
 
-def _error_is_output_format_unsupported(error: Exception) -> bool:
-    if not isinstance(error, anthropic.BadRequestError):
-        return False
-    message = str(error).lower()
-    return "does not support output format" in message
-
-
-def _error_is_schema_too_complex_for_structured_output(error: Exception) -> bool:
-    if not isinstance(error, anthropic.BadRequestError):
-        return False
-    message = str(error).lower()
-    indicators = [
-        "schemas contains too many parameters with union types",
-        "exponential compilation cost",
-        "limit: 16 parameters with unions",
-    ]
-    return any(indicator in message for indicator in indicators)
-
-
-def _create_message_with_optional_output_format(
+def _create_message_with_schema(
     api_client: anthropic.Anthropic,
     *,
     model: str,
     max_tokens: int,
     messages: list[dict[str, Any]],
     output_schema: dict[str, Any],
-    fallback_text: str,
 ) -> Any:
-    try:
-        return api_client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            output_config={
-                "format": {
-                    "type": "json_schema",
-                    "schema": output_schema,
-                }
-            },
-            messages=messages,
-        )
-    except Exception as exc:
-        if not (
-            _error_is_output_format_unsupported(exc)
-            or _error_is_schema_too_complex_for_structured_output(exc)
-        ):
-            raise
-    fallback_messages = [
-        {
-            "role": "user",
-            "content": [
-                messages[0]["content"][0],
-                {"type": "text", "text": fallback_text},
-            ],
-        }
-    ]
     return api_client.messages.create(
         model=model,
         max_tokens=max_tokens,
-        messages=fallback_messages,
+        output_config={"format": {"type": "json_schema", "schema": output_schema}},
+        messages=messages,
     )
 
 
+def _is_stop_reason_max_tokens(response: Any) -> bool:
+    return getattr(response, "stop_reason", None) == "max_tokens"
+
+
+def _require_all_object_properties(schema: dict[str, Any]) -> None:
+    if schema.get("type") == "object":
+        props = schema.get("properties", {})
+        schema["required"] = sorted(list(props.keys()))
+        for child in props.values():
+            if isinstance(child, dict):
+                _require_all_object_properties(child)
+    if schema.get("type") == "array":
+        items = schema.get("items")
+        if isinstance(items, dict):
+            _require_all_object_properties(items)
+    if "anyOf" in schema and isinstance(schema["anyOf"], list):
+        for child in schema["anyOf"]:
+            if isinstance(child, dict):
+                _require_all_object_properties(child)
+
+
 def _classifier_output_schema(schema_path: Path | str | None = None) -> dict[str, Any]:
-    schema_text = _load_schema_text(schema_path)
-    top_level_fields = _extract_yaml_top_level_fields(schema_text)
+    top_level_fields = _extract_yaml_top_level_fields(_load_schema_text(schema_path))
     return {
         "type": "object",
         "additionalProperties": False,
@@ -628,6 +530,271 @@ def _classifier_output_schema(schema_path: Path | str | None = None) -> dict[str
     }
 
 
+def _normalize_control_source(
+    value: str | None, allowed_values: list[str]
+) -> str | None:
+    if value is None:
+        return None
+    if value in allowed_values:
+        return value
+    upper = value.upper()
+    allowed_upper = {item.upper(): item for item in allowed_values}
+    if upper in {"BMS", "BAS"}:
+        if "BAS" in allowed_upper:
+            return allowed_upper["BAS"]
+        if "BMS" in allowed_upper:
+            return allowed_upper["BMS"]
+    return value
+
+
+def _normalize_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    _coerce_snapshot_shape(snapshot)
+    systems = snapshot.get("air_systems")
+    if isinstance(systems, list):
+        for system in systems:
+            if not isinstance(system, dict):
+                continue
+            normalized = _normalize_control_source(
+                system.get("control_source"),
+                ["BAS", "local", "manual"],
+            )
+            system["control_source"] = normalized
+    return snapshot
+
+
+def _coerce_snapshot_shape(snapshot: dict[str, Any]) -> None:
+    # Normalize conditions aliases and required keys.
+    conditions = snapshot.get("conditions")
+    if not isinstance(conditions, dict):
+        conditions = {}
+    if "oat_f" not in conditions:
+        conditions["oat_f"] = conditions.get("outdoor_temp_f")
+        if conditions["oat_f"] is None:
+            conditions["oat_f"] = conditions.get("outdoor_temperature_f")
+    if "rh_pct" not in conditions:
+        conditions["rh_pct"] = conditions.get("outdoor_humidity_pct")
+    if "season" not in conditions:
+        conditions["season"] = conditions.get("weather_season")
+    snapshot["conditions"] = {
+        "oat_f": conditions.get("oat_f"),
+        "rh_pct": conditions.get("rh_pct"),
+        "season": conditions.get("season"),
+    }
+
+    # Ensure required nested air_system blocks are present.
+    air_systems_input = snapshot.get("air_systems")
+    if not isinstance(air_systems_input, list):
+        air_systems_input = []
+    normalized_air_systems: list[dict[str, Any]] = []
+    for system in air_systems_input:
+        if not isinstance(system, dict):
+            continue
+        temps = system.get("temperatures")
+        if not isinstance(temps, dict):
+            temps = {}
+        temps.setdefault("supply_air_actual_f", system.get("supply_air_actual_f"))
+        temps.setdefault("supply_air_setpoint_f", system.get("supply_air_setpoint_f"))
+        temps.setdefault("return_air_f", system.get("return_air_f"))
+        temps.setdefault("discharge_air_f", system.get("discharge_air_f"))
+        normalized_temperatures = {
+            "supply_air_actual_f": temps.get("supply_air_actual_f"),
+            "supply_air_setpoint_f": temps.get("supply_air_setpoint_f"),
+            "return_air_f": temps.get("return_air_f"),
+            "discharge_air_f": temps.get("discharge_air_f"),
+        }
+
+        econ = system.get("economizer")
+        if not isinstance(econ, dict):
+            econ = {}
+        normalized_economizer = {
+            "active": econ.get("active"),
+            "position_pct": econ.get("position_pct"),
+        }
+
+        fans_input = system.get("fans")
+        normalized_fans: list[dict[str, Any]] | None = None
+        if isinstance(fans_input, list):
+            normalized_fans = []
+            for fan in fans_input:
+                if not isinstance(fan, dict):
+                    continue
+                if "vfd_pct" not in fan:
+                    fan["vfd_pct"] = fan.get("vfd_speed_pct")
+                normalized_fans.append(
+                    {
+                        "id": fan.get("id") or fan.get("name") or "unknown-fan",
+                        "role": fan.get("role"),
+                        "status": fan.get("status"),
+                        "vfd_pct": fan.get("vfd_pct"),
+                    }
+                )
+
+        normalized_air_systems.append(
+            {
+                "id": system.get("id") or system.get("name") or "unknown-air-system",
+                "mode": system.get("mode"),
+                "out_of_schedule": system.get("out_of_schedule"),
+                "control_source": system.get("control_source"),
+                "fans": normalized_fans,
+                "sa_static_pressure_actual_inwc": system.get(
+                    "sa_static_pressure_actual_inwc"
+                ),
+                "sa_static_pressure_setpoint_inwc": system.get(
+                    "sa_static_pressure_setpoint_inwc"
+                ),
+                "temperatures": normalized_temperatures,
+                "economizer": normalized_economizer,
+                "vav_demand_pct": system.get("vav_demand_pct"),
+                "overrides": system.get("overrides"),
+                "notes": system.get("notes"),
+            }
+        )
+    snapshot["air_systems"] = normalized_air_systems
+
+    # Ensure required plant structures exist.
+    heating = snapshot.get("heating_plant")
+    if not isinstance(heating, dict):
+        heating = {}
+    reset = heating.get("hws_oat_reset_active")
+    if not isinstance(reset, dict):
+        reset = {}
+    snapshot["heating_plant"] = {
+        "boilers": heating.get("boilers"),
+        "hws_temp_actual_f": heating.get("hws_temp_actual_f"),
+        "hws_temp_setpoint_f": heating.get("hws_temp_setpoint_f"),
+        "hws_oat_reset_active": {
+            "oat_min_f": reset.get("oat_min_f"),
+            "oat_max_f": reset.get("oat_max_f"),
+            "hws_min_f": reset.get("hws_min_f"),
+            "hws_max_f": reset.get("hws_max_f"),
+        },
+        "vav_heat_request_pct": heating.get("vav_heat_request_pct"),
+    }
+
+    cooling = snapshot.get("cooling_plant")
+    if not isinstance(cooling, dict):
+        cooling = {}
+    snapshot["cooling_plant"] = {
+        "chws_temp_actual_f": cooling.get("chws_temp_actual_f"),
+        "chws_temp_setpoint_f": cooling.get("chws_temp_setpoint_f"),
+        "oat_reset_active": cooling.get("oat_reset_active"),
+        "units": cooling.get("units"),
+    }
+
+    zones_input = snapshot.get("zones")
+    if not isinstance(zones_input, list):
+        snapshot["zones"] = None
+    else:
+        snapshot["zones"] = [
+            {
+                "id": zone.get("id") or zone.get("name") or f"zone-{idx+1}",
+                "name": zone.get("name") or zone.get("space"),
+                "space_temp_actual_f": (
+                    zone.get("space_temp_actual_f")
+                    if "space_temp_actual_f" in zone
+                    else zone.get("zone_temp_f")
+                ),
+                "space_temp_setpoint_f": (
+                    zone.get("space_temp_setpoint_f")
+                    if "space_temp_setpoint_f" in zone
+                    else zone.get("setpoint_f")
+                ),
+                "damper_position_pct": zone.get("damper_position_pct"),
+                "reheat_active": zone.get("reheat_active"),
+                "notes": zone.get("notes"),
+            }
+            for idx, zone in enumerate(zones_input)
+            if isinstance(zone, dict)
+        ]
+
+    severity_map = {
+        "low": "info",
+        "medium": "warning",
+        "high": "critical",
+        "info": "info",
+        "warning": "warning",
+        "critical": "critical",
+    }
+    anomalies_input = snapshot.get("anomalies")
+    if isinstance(anomalies_input, dict):
+        anomalies_input = [
+            {"system_id": "alarm_summary", "description": json.dumps(anomalies_input)}
+        ]
+    if not isinstance(anomalies_input, list):
+        anomalies_input = []
+    normalized_anomalies: list[dict[str, Any]] = []
+    for idx, anomaly in enumerate(anomalies_input):
+        if not isinstance(anomaly, dict):
+            continue
+        severity_raw = anomaly.get("severity")
+        severity = (
+            severity_map.get(str(severity_raw).lower())
+            if isinstance(severity_raw, str)
+            else None
+        )
+        normalized_anomalies.append(
+            {
+                "system_id": anomaly.get("system_id")
+                or anomaly.get("id")
+                or f"anomaly-{idx+1}",
+                "description": anomaly.get("description"),
+                "severity": severity,
+            }
+        )
+    snapshot["anomalies"] = normalized_anomalies
+
+
+def _validate_enums_against_schema(
+    value: Any,
+    schema: dict[str, Any],
+    path: str = "$",
+) -> None:
+    if "enum" in schema and value is not None:
+        allowed = schema["enum"]
+        if value not in allowed:
+            raise ValueError(f"Invalid enum at {path}: {value!r} not in {allowed!r}")
+
+    schema_type = schema.get("type")
+    if isinstance(schema_type, list):
+        if value is None and "null" in schema_type:
+            return
+
+    if value is None:
+        return
+
+    if schema_type == "object":
+        props = schema.get("properties", {})
+        if isinstance(value, dict):
+            for key, child_schema in props.items():
+                if key in value:
+                    _validate_enums_against_schema(
+                        value[key],
+                        child_schema,
+                        path=f"{path}.{key}",
+                    )
+        return
+
+    if schema_type == "array":
+        item_schema = schema.get("items", {})
+        if isinstance(value, list):
+            for idx, item in enumerate(value):
+                _validate_enums_against_schema(item, item_schema, f"{path}[{idx}]")
+        return
+
+
+def _parse_timezone_aware_timestamp(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("timestamp must include timezone information.")
+    return parsed
+
+
+def safe_timestamp_for_filename(timestamp: str) -> str:
+    parsed = _parse_timezone_aware_timestamp(timestamp)
+    normalized = parsed.isoformat()
+    return normalized.replace(":", "_")
+
+
 def is_bms_screenshot(
     image_path: str | Path,
     *,
@@ -637,15 +804,185 @@ def is_bms_screenshot(
 ) -> dict[str, Any]:
     api_client = _get_client(client)
     media_type, image_data = _encode_image_for_api(image_path)
-    output_schema = _classifier_output_schema(schema_path)
-    prompt = (
-        "Determine if this image is a BMS screenshot with data relevant to the BMS "
-        "snapshot schema (such as building metadata, conditions, air systems, "
-        "heating/cooling plant, zones, or anomalies). "
-        "Return only the structured output."
+    response = _create_message_with_schema(
+        api_client,
+        model=model,
+        max_tokens=600,
+        output_schema=_classifier_output_schema(schema_path),
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": image_data,
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": (
+                            "Determine if this is a BMS screenshot. Return structured output only."
+                        ),
+                    },
+                ],
+            }
+        ],
     )
+    return BmsScreenshotCheck.model_validate(
+        _extract_json_from_response(response)
+    ).model_dump()
 
-    messages = [
+
+def _snapshot_list_schema(snapshot_schema: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "snapshots": {"type": "array", "minItems": 1, "items": snapshot_schema}
+        },
+        "required": ["snapshots"],
+    }
+
+
+def _drop_null_unions_for_compilation(schema: dict[str, Any]) -> dict[str, Any]:
+    if schema.get("type") == "object":
+        for key, child in list(schema.get("properties", {}).items()):
+            if isinstance(child, dict):
+                schema["properties"][key] = _drop_null_unions_for_compilation(child)
+        return schema
+
+    if schema.get("type") == "array":
+        items = schema.get("items")
+        if isinstance(items, dict):
+            schema["items"] = _drop_null_unions_for_compilation(items)
+        return schema
+
+    if isinstance(schema.get("type"), list):
+        non_null = [t for t in schema["type"] if t != "null"]
+        if non_null:
+            schema["type"] = non_null[0] if len(non_null) == 1 else non_null
+        else:
+            schema["type"] = "string"
+        return schema
+
+    if "anyOf" in schema and isinstance(schema["anyOf"], list):
+        non_null_anyof = []
+        for child in schema["anyOf"]:
+            if isinstance(child, dict) and child.get("type") == "null":
+                continue
+            if isinstance(child, dict):
+                non_null_anyof.append(_drop_null_unions_for_compilation(child))
+        if len(non_null_anyof) == 1:
+            return non_null_anyof[0]
+        if len(non_null_anyof) > 1:
+            schema["anyOf"] = non_null_anyof
+            return schema
+        return {"type": "string"}
+
+    return schema
+
+
+def _compact_snapshot_payload_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "snapshots": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "building_id": {"type": "string"},
+                        "timestamp": {"type": "string"},
+                        "snapshot_json": {"type": "string"},
+                    },
+                    "required": ["building_id", "timestamp", "snapshot_json"],
+                },
+            }
+        },
+        "required": ["snapshots"],
+    }
+
+
+def _snapshot_repair_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "snapshot_json": {"type": "string"},
+        },
+        "required": ["snapshot_json"],
+    }
+
+
+def _repair_snapshot_with_llm(
+    api_client: anthropic.Anthropic,
+    *,
+    model: str,
+    broken_snapshot: dict[str, Any],
+    building_id_hint: str,
+) -> dict[str, Any]:
+    repair_messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Normalize this snapshot JSON into the exact required schema keys. "
+                        "Return snapshot_json as a JSON-stringified object with top-level keys: "
+                        "building_id, timestamp, conditions, air_systems, heating_plant, cooling_plant, zones, anomalies. "
+                        "conditions must use keys oat_f, rh_pct, season. "
+                        "Use null for missing values. "
+                        f"If building_id is missing, use {building_id_hint}. "
+                        f"Input snapshot:\n{json.dumps(broken_snapshot)}"
+                    ),
+                }
+            ],
+        }
+    ]
+    response = _create_message_with_schema(
+        api_client,
+        model=model,
+        max_tokens=1800,
+        output_schema=_snapshot_repair_schema(),
+        messages=repair_messages,
+    )
+    if _is_stop_reason_max_tokens(response):
+        response = _create_message_with_schema(
+            api_client,
+            model=model,
+            max_tokens=3600,
+            output_schema=_snapshot_repair_schema(),
+            messages=repair_messages,
+        )
+    payload = _extract_json_from_response(response)
+    if not isinstance(payload.get("snapshot_json"), str):
+        raise ValueError("Snapshot repair response missing snapshot_json string.")
+    repaired = json.loads(payload["snapshot_json"])
+    if not isinstance(repaired, dict):
+        raise ValueError("Snapshot repair output is not a JSON object.")
+    return repaired
+
+
+def extract_bms_snapshots(
+    image_path: str | Path,
+    *,
+    building_id_hint: str | None = None,
+    client: anthropic.Anthropic | None = None,
+    schema_path: str | Path | None = None,
+    model: str = DEFAULT_MODEL,
+) -> list[dict[str, Any]]:
+    api_client = _get_client(client)
+    media_type, image_data = _encode_image_for_api(image_path)
+    snapshot_schema = yaml_to_anthropic_json_schema(schema_path)
+    request_schema = _compact_snapshot_payload_schema()
+    request_messages = [
         {
             "role": "user",
             "content": [
@@ -657,33 +994,82 @@ def is_bms_screenshot(
                         "data": image_data,
                     },
                 },
-                {"type": "text", "text": prompt},
+                {
+                    "type": "text",
+                    "text": (
+                        "Extract one BMS snapshot per distinct timestamp shown. "
+                        "If the screen shows a log or list (e.g. alarm list, event log, trend table) "
+                        "where each row has its own timestamp, create one snapshot per row using "
+                        "that row's timestamp — do not collapse multiple rows into one snapshot. "
+                        "Use ISO 8601 timestamp with timezone. "
+                        "Use null for unknown values. "
+                        "Do not map indoor/equipment temperatures to outdoor temperature. "
+                        "Treat BAS and BMS as equivalent where needed. "
+                        "For each snapshot item, set snapshot_json to a JSON-stringified object "
+                        "matching the full BMS snapshot structure with these exact top-level keys: "
+                        "building_id, timestamp, conditions, air_systems, heating_plant, cooling_plant, zones, anomalies. "
+                        "Do not output alternate objects like alarm/event summaries. "
+                        f"If building id is unclear, use {building_id_hint or Path(image_path).stem}."
+                    ),
+                },
             ],
         }
     ]
-    fallback_text = (
-        f"{prompt}\n\n"
-        "Return exactly one JSON object and nothing else.\n"
-        "Do not include markdown fences, explanations, or extra text.\n"
-        "The first non-whitespace character must be '{' and the last must be '}'.\n"
-        "JSON shape:\n"
-        "{"
-        '"is_bms_screenshot": boolean, '
-        '"reason": string|null, '
-        '"structured_fields_present": string[]'
-        "}\n"
-    )
-    response = _create_message_with_optional_output_format(
+    response = _create_message_with_schema(
         api_client,
         model=model,
-        max_tokens=600,
-        messages=messages,
-        output_schema=output_schema,
-        fallback_text=fallback_text,
+        max_tokens=2600,
+        output_schema=request_schema,
+        messages=request_messages,
     )
-
-    parsed = _extract_json_from_response(response)
-    return BmsScreenshotCheck.model_validate(parsed).model_dump()
+    if _is_stop_reason_max_tokens(response):
+        response = _create_message_with_schema(
+            api_client,
+            model=model,
+            max_tokens=5200,
+            output_schema=request_schema,
+            messages=request_messages,
+        )
+    payload = _extract_json_from_response(response)
+    snapshots_raw = payload.get("snapshots")
+    if not isinstance(snapshots_raw, list):
+        raise ValueError("Expected 'snapshots' list in structured output response.")
+    validated: list[dict[str, Any]] = []
+    for raw in snapshots_raw:
+        if not isinstance(raw, dict):
+            raise ValueError("Snapshot item must be an object.")
+        item = dict(raw)
+        snapshot_json = item.get("snapshot_json")
+        if not isinstance(snapshot_json, str):
+            raise ValueError("Expected snapshot_json as JSON string in compact schema.")
+        parsed_snapshot = json.loads(snapshot_json)
+        if not isinstance(parsed_snapshot, dict):
+            raise ValueError("Parsed snapshot_json must be an object.")
+        if not parsed_snapshot.get("building_id"):
+            parsed_snapshot["building_id"] = (
+                item.get("building_id") or building_id_hint or Path(image_path).stem
+            )
+        if not parsed_snapshot.get("timestamp") and isinstance(
+            item.get("timestamp"), str
+        ):
+            parsed_snapshot["timestamp"] = item["timestamp"]
+        normalized = _normalize_snapshot(parsed_snapshot)
+        try:
+            _validate_enums_against_schema(normalized, snapshot_schema)
+            validated.append(BmsSnapshot.model_validate(normalized).model_dump())
+        except ValidationError as exc:
+            repaired = _repair_snapshot_with_llm(
+                api_client,
+                model=model,
+                broken_snapshot=normalized,
+                building_id_hint=building_id_hint or Path(image_path).stem,
+            )
+            _validate_enums_against_schema(repaired, snapshot_schema)
+            repaired_normalized = _normalize_snapshot(repaired)
+            validated.append(
+                BmsSnapshot.model_validate(repaired_normalized).model_dump()
+            )
+    return validated
 
 
 def extract_bms_snapshot(
@@ -694,88 +1080,14 @@ def extract_bms_snapshot(
     schema_path: str | Path | None = None,
     model: str = DEFAULT_MODEL,
 ) -> dict[str, Any]:
-    api_client = _get_client(client)
-    media_type, image_data = _encode_image_for_api(image_path)
-    json_schema = yaml_to_anthropic_json_schema(schema_path)
-    prompt = (
-        "Extract a BMS snapshot from this image and return only structured output "
-        "matching the requested schema. Use null when values are not visible. "
-        "If building_id is unclear, use this fallback building_id_hint: "
-        f"{building_id_hint or Path(image_path).stem}."
-    )
-
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": media_type,
-                        "data": image_data,
-                    },
-                },
-                {"type": "text", "text": prompt},
-            ],
-        }
-    ]
-    fallback_text = (
-        f"{prompt}\n\n"
-        "Return exactly one JSON object and nothing else.\n"
-        "Do not include markdown fences, explanations, or extra text.\n"
-        "The first non-whitespace character must be '{' and the last must be '}'.\n"
-        f"Target JSON Schema:\n{json.dumps(json_schema)}"
-    )
-    response = _create_message_with_optional_output_format(
-        api_client,
+    snapshots = extract_bms_snapshots(
+        image_path,
+        building_id_hint=building_id_hint,
+        client=client,
+        schema_path=schema_path,
         model=model,
-        max_tokens=2400,
-        messages=messages,
-        output_schema=json_schema,
-        fallback_text=fallback_text,
     )
-
-    parsed = _extract_json_from_response(response)
-    try:
-        snapshot = BmsSnapshot.model_validate(parsed).model_dump()
-    except ValidationError:
-        snapshot = dict(parsed) if isinstance(parsed, dict) else {}
-        snapshot.setdefault("building_id", building_id_hint or Path(image_path).stem)
-        snapshot.setdefault("timestamp", "")
-        snapshot.setdefault(
-            "conditions",
-            {"oat_f": None, "rh_pct": None, "season": None},
-        )
-        if not isinstance(snapshot.get("conditions"), dict):
-            snapshot["conditions"] = {"oat_f": None, "rh_pct": None, "season": None}
-        snapshot.setdefault("air_systems", [])
-        snapshot.setdefault(
-            "heating_plant",
-            {
-                "hws_temp_actual_f": None,
-                "hws_temp_setpoint_f": None,
-                "hws_oat_reset_active": {
-                    "oat_min_f": None,
-                    "oat_max_f": None,
-                    "hws_min_f": None,
-                    "hws_max_f": None,
-                },
-                "vav_heat_request_pct": None,
-            },
-        )
-        snapshot.setdefault(
-            "cooling_plant",
-            {
-                "chws_temp_actual_f": None,
-                "chws_temp_setpoint_f": None,
-                "oat_reset_active": None,
-            },
-        )
-        snapshot.setdefault("anomalies", [])
-    if not snapshot.get("building_id"):
-        snapshot["building_id"] = building_id_hint or Path(image_path).stem
-    return snapshot
+    return snapshots[0]
 
 
 def ingest_image(
@@ -790,10 +1102,7 @@ def ingest_image(
     hint = derive_building_id_hint(image_path, image_root=image_root)
     if not skip_classifier:
         classifier = is_bms_screenshot(
-            image_path,
-            client=client,
-            schema_path=schema_path,
-            model=model,
+            image_path, client=client, schema_path=schema_path, model=model
         )
         if not classifier.get("is_bms_screenshot", False):
             return None
@@ -814,19 +1123,27 @@ def ingest_directory(
     schema_path: str | Path | None = None,
     model: str = DEFAULT_MODEL,
 ) -> list[dict[str, Any]]:
-    results: list[dict[str, Any]] = []
-    for image_path in list_image_paths(directory):
-        extracted = ingest_image(
-            image_path,
-            image_root=directory,
-            skip_classifier=skip_classifier,
-            client=client,
-            schema_path=schema_path,
-            model=model,
-        )
-        if extracted is not None:
-            results.append(extracted)
-    return results
+    image_paths = list_image_paths(directory)
+    indexed_results: dict[int, dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_LLM_TASKS) as pool:
+        futures = {
+            pool.submit(
+                ingest_image,
+                image_path,
+                image_root=directory,
+                skip_classifier=skip_classifier,
+                client=client,
+                schema_path=schema_path,
+                model=model,
+            ): idx
+            for idx, image_path in enumerate(image_paths)
+        }
+        for future in as_completed(futures):
+            idx = futures[future]
+            result = future.result()
+            if result is not None:
+                indexed_results[idx] = result
+    return [indexed_results[i] for i in sorted(indexed_results)]
 
 
 def ask_image_question(
@@ -858,12 +1175,13 @@ def ask_image_question(
             }
         ],
     )
-    texts = [
-        getattr(block, "text", "")
-        for block in getattr(response, "content", [])
-        if getattr(block, "text", None)
-    ]
-    return "\n".join(texts).strip()
+    return "\n".join(
+        [
+            getattr(block, "text", "")
+            for block in getattr(response, "content", [])
+            if getattr(block, "text", None)
+        ]
+    ).strip()
 
 
 def ingest_directory_to_json(

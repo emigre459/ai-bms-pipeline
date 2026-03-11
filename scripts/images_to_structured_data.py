@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from tqdm import tqdm
@@ -14,6 +15,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
+
+import dotenv
+
+dotenv.load_dotenv(PROJECT_ROOT / ".env")
 
 from ai_bms_pipeline import image_ingest
 from ai_bms_pipeline.logs import logger
@@ -52,7 +57,28 @@ def _resolve_input_images(input_path: Path) -> list[Path]:
 
 def _write_output(output_dir: Path, image_path: Path, payload: dict) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"{image_path.stem}.json"
+    output_path = output_dir / f"{image_path.stem}.JSON"
+    output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return output_path
+
+
+def _write_snapshot_output(output_dir: Path, payload: dict) -> Path:
+    building_id = str(payload.get("building_id") or "unknown_building")
+    timestamp = str(payload.get("timestamp") or "")
+    safe_timestamp = image_ingest.safe_timestamp_for_filename(timestamp)
+    building_dir = output_dir / building_id
+    building_dir.mkdir(parents=True, exist_ok=True)
+
+    output_path = building_dir / f"{safe_timestamp}.JSON"
+    if output_path.exists():
+        suffix = 2
+        while True:
+            candidate = building_dir / f"{safe_timestamp}__{suffix}.JSON"
+            if not candidate.exists():
+                output_path = candidate
+                break
+            suffix += 1
+
     output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return output_path
 
@@ -77,14 +103,8 @@ def run(
     input_images = _resolve_input_images(resolved_input)
     is_directory_input = resolved_input.is_dir()
 
-    iterator = (
-        tqdm(input_images, desc="Processing images", unit="image")
-        if is_directory_input
-        else input_images
-    )
-
-    written_paths: list[Path] = []
-    for image_path in iterator:
+    def _process_image(image_path: Path) -> list[Path]:
+        local_written: list[Path] = []
         if classify_only:
             payload = image_ingest.is_bms_screenshot(
                 image_path,
@@ -96,6 +116,8 @@ def run(
                 logger.error("Image classified as not viable: %s", image_path)
             bms_indicator = "" if is_viable else "not "
             print(f"{image_path.name}: {bms_indicator}BMS image")
+            local_written.append(_write_output(resolved_output, image_path, payload))
+            return local_written
         else:
             classifier: dict | None = None
             is_viable = True
@@ -108,22 +130,48 @@ def run(
                 is_viable = bool(classifier.get("is_bms_screenshot", False))
                 if not is_viable:
                     logger.error("Image classified as not viable: %s", image_path)
+                    return local_written
 
             hint = image_ingest.derive_building_id_hint(
                 image_path=image_path,
                 image_root=resolved_input if resolved_input.is_dir() else None,
             )
-            payload = image_ingest.extract_bms_snapshot(
+            snapshots = image_ingest.extract_bms_snapshots(
                 image_path=image_path,
                 building_id_hint=hint,
                 schema_path=resolved_schema,
                 model=model,
             )
-            if classifier is not None:
-                payload["classifier"] = classifier
+            for payload in snapshots:
+                if classifier is not None:
+                    payload["classifier"] = classifier
+                local_written.append(_write_snapshot_output(resolved_output, payload))
+            return local_written
 
-        out_path = _write_output(resolved_output, image_path, payload)
-        written_paths.append(out_path)
+    written_paths: list[Path] = []
+    if is_directory_input:
+        with ThreadPoolExecutor(
+            max_workers=image_ingest.MAX_CONCURRENT_LLM_TASKS
+        ) as pool:
+            futures = {
+                pool.submit(_process_image, image_path): idx
+                for idx, image_path in enumerate(input_images)
+            }
+            by_index: dict[int, list[Path]] = {}
+            for future in tqdm(
+                as_completed(futures),
+                total=len(futures),
+                desc="Processing images",
+                unit="image",
+            ):
+                idx = futures[future]
+                by_index[idx] = future.result()
+            for idx in sorted(by_index):
+                written_paths.extend(by_index[idx])
+        return written_paths
+
+    for image_path in input_images:
+        written_paths.extend(_process_image(image_path))
 
     return written_paths
 
@@ -189,7 +237,6 @@ def main() -> None:
         model=args.model,
     )
     for path in written:
-        # logger.info(f"Wrote {path}")
         print(f"Wrote {path}")
 
 

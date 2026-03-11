@@ -1,6 +1,7 @@
 LOGGER_NAME = "ai_bms_pipeline"
 LOGGER_FORMAT = "%(asctime)s: %(levelname)s (%(name)s:%(module)s.%(funcName)s:L%(lineno)d) - %(message)s"
 DATETIME_FORMAT = "%Y-%m-%d_T%H_%M_%S%Z"
+MAX_CONCURRENT_LLM_TASKS = 50
 
 # Taken from https://www.color-hex.com/color-palette/1041937
 # <a target="_blank" href="https://icons8.com/icon/7880/location">Location</a> icon by <a target="_blank" href="https://icons8.com">Icons8</a>

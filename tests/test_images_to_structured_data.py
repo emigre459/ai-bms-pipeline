@@ -66,7 +66,7 @@ def test_single_image_classify_only_writes_filename_json(
     )
 
     assert len(written) == 1
-    assert written[0].name == "single.json"
+    assert written[0].name == "single.JSON"
     assert written[0].is_file()
     captured = capsys.readouterr()
     assert "single.webp: BMS image" in captured.out
@@ -117,11 +117,20 @@ def test_directory_input_is_processed_recursively(
     _touch(input_dir / "building-1" / "one.jpg")
     _touch(input_dir / "building-2" / "nested" / "two.png")
 
-    monkeypatch.setattr(
-        script.image_ingest,
-        "extract_bms_snapshot",
-        lambda *args, **kwargs: {"building_id": "b", "timestamp": "t"},
-    )
+    def _fake_extract(image_path, **_kwargs):
+        stem = Path(image_path).stem
+        return [
+            {
+                "building_id": "b1",
+                "timestamp": f"2026-03-10T10:00:00+00:0{0 if stem == 'one' else 1}",
+            },
+            {
+                "building_id": "b1",
+                "timestamp": f"2026-03-10T11:00:00+00:0{0 if stem == 'one' else 1}",
+            },
+        ]
+
+    monkeypatch.setattr(script.image_ingest, "extract_bms_snapshots", _fake_extract)
     monkeypatch.setattr(
         script.image_ingest,
         "is_bms_screenshot",
@@ -143,6 +152,11 @@ def test_directory_input_is_processed_recursively(
         skip_classify=False,
     )
 
-    names = {p.name for p in written}
-    assert names == {"one.json", "two.json"}
+    rels = {p.relative_to(tmp_path / "out").as_posix() for p in written}
+    assert rels == {
+        "b1/2026-03-10T10_00_00+00_00.JSON",
+        "b1/2026-03-10T10_00_00+00_01.JSON",
+        "b1/2026-03-10T11_00_00+00_00.JSON",
+        "b1/2026-03-10T11_00_00+00_01.JSON",
+    }
     assert tqdm_calls["count"] == 1
