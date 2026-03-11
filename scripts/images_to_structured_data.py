@@ -8,6 +8,7 @@ import json
 import sys
 from pathlib import Path
 
+from tqdm import tqdm
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SRC_DIR = PROJECT_ROOT / "src"
@@ -74,16 +75,40 @@ def run(
     resolved_schema = Path(schema_path).expanduser().resolve()
     resolved_output = Path(output_dir).expanduser().resolve()
     input_images = _resolve_input_images(resolved_input)
+    is_directory_input = resolved_input.is_dir()
+
+    iterator = (
+        tqdm(input_images, desc="Processing images", unit="image")
+        if is_directory_input
+        else input_images
+    )
 
     written_paths: list[Path] = []
-    for image_path in input_images:
+    for image_path in iterator:
         if classify_only:
             payload = image_ingest.is_bms_screenshot(
                 image_path,
                 schema_path=resolved_schema,
                 model=model,
             )
+            is_viable = bool(payload.get("is_bms_screenshot", False))
+            if not is_viable:
+                logger.error("Image classified as not viable: %s", image_path)
+            bms_indicator = "" if is_viable else "not "
+            print(f"{image_path.name}: {bms_indicator}BMS image")
         else:
+            classifier: dict | None = None
+            is_viable = True
+            if not skip_classify:
+                classifier = image_ingest.is_bms_screenshot(
+                    image_path=image_path,
+                    schema_path=resolved_schema,
+                    model=model,
+                )
+                is_viable = bool(classifier.get("is_bms_screenshot", False))
+                if not is_viable:
+                    logger.error("Image classified as not viable: %s", image_path)
+
             hint = image_ingest.derive_building_id_hint(
                 image_path=image_path,
                 image_root=resolved_input if resolved_input.is_dir() else None,
@@ -94,12 +119,7 @@ def run(
                 schema_path=resolved_schema,
                 model=model,
             )
-            if not skip_classify:
-                classifier = image_ingest.is_bms_screenshot(
-                    image_path=image_path,
-                    schema_path=resolved_schema,
-                    model=model,
-                )
+            if classifier is not None:
                 payload["classifier"] = classifier
 
         out_path = _write_output(resolved_output, image_path, payload)
@@ -136,7 +156,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--classify",
+        "--classify-only",
         action="store_true",
         help="Run classifier step alone and write classifier output only.",
     )
@@ -164,7 +184,7 @@ def main() -> None:
         args.input_path,
         schema_path=args.config,
         output_dir=args.output,
-        classify_only=args.classify,
+        classify_only=args.classify_only,
         skip_classify=args.skip_classify,
         model=args.model,
     )

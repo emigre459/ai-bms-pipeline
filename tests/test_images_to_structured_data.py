@@ -44,7 +44,9 @@ def test_raises_if_classify_and_skip_classify_both_enabled(tmp_path: Path) -> No
 
 
 def test_single_image_classify_only_writes_filename_json(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     script = _load_script_module()
     image_path = tmp_path / "single.webp"
@@ -66,6 +68,45 @@ def test_single_image_classify_only_writes_filename_json(
     assert len(written) == 1
     assert written[0].name == "single.json"
     assert written[0].is_file()
+    captured = capsys.readouterr()
+    assert "single.webp: BMS image" in captured.out
+
+
+def test_classify_prints_not_bms_and_logs_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    script = _load_script_module()
+    image_path = tmp_path / "non_bms.jpg"
+    _touch(image_path)
+    logged: list[str] = []
+
+    monkeypatch.setattr(
+        script.image_ingest,
+        "is_bms_screenshot",
+        lambda *args, **kwargs: {
+            "is_bms_screenshot": False,
+            "reason": "not relevant",
+        },
+    )
+    monkeypatch.setattr(
+        script.logger,
+        "error",
+        lambda message, *args: logged.append(message % args),
+    )
+
+    script.run(
+        image_path,
+        schema_path=tmp_path / "schema.yaml",
+        output_dir=tmp_path / "out",
+        classify_only=True,
+    )
+
+    captured = capsys.readouterr()
+    assert "non_bms.jpg: not BMS image" in captured.out
+    assert logged
+    assert "not viable" in logged[0]
 
 
 def test_directory_input_is_processed_recursively(
@@ -86,6 +127,13 @@ def test_directory_input_is_processed_recursively(
         "is_bms_screenshot",
         lambda *args, **kwargs: {"is_bms_screenshot": True, "reason": None},
     )
+    tqdm_calls = {"count": 0}
+
+    def _fake_tqdm(iterable, **_kwargs):
+        tqdm_calls["count"] += 1
+        return iterable
+
+    monkeypatch.setattr(script, "tqdm", _fake_tqdm)
 
     written = script.run(
         input_dir,
@@ -97,3 +145,4 @@ def test_directory_input_is_processed_recursively(
 
     names = {p.name for p in written}
     assert names == {"one.json", "two.json"}
+    assert tqdm_calls["count"] == 1

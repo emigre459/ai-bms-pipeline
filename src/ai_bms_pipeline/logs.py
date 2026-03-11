@@ -69,4 +69,5 @@ def setup_logger(
 
     return logging.getLogger(logger_name)
 
+
 logger = setup_logger()
