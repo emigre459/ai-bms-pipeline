@@ -16,8 +16,8 @@ Why classifier outputs can be flaky in this version:
 
 In truth, the classifier is a very rough "first filter" but can result in structured data that is essentially all nulls when returns a false positive. The analysis stage is useful as it runs a secondary effective filter based on the structured results (e.g. more than X nulls will result in it assuming the original image was not operationally-relevant and that it is a false positive from stage 1).
 
-- Prototype classifier quality metric (fill in later):
-  - Current classifier F1 on labeled validation set: **[PLACEHOLDER - TO BE MEASURED]**
+### BMS Image Data Extractor
+While this is using a response schema structure to guarantee valid output compared to the original schema provided, I have not had time to 
 
 
 # What this could become with more time
