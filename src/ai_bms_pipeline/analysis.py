@@ -11,7 +11,6 @@ Strategy:
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,9 +18,13 @@ from typing import Any
 
 import anthropic
 
-from ai_bms_pipeline.config import MAX_CONCURRENT_LLM_TASKS
 from ai_bms_pipeline.image_ingest import DEFAULT_MODEL, _get_client
+from ai_bms_pipeline.logs import logger
 from ai_bms_pipeline.utils import DEFAULT_FACTORS, aggregate_totals
+
+# Minimum number of non-null operational fields a snapshot must have to be
+# included in analysis.  Below this threshold the snapshot is essentially empty.
+_MIN_DATA_SCORE = 2
 
 # ─── Deterministic findings ────────────────────────────────────────────────────
 
@@ -379,6 +382,98 @@ def _check_supply_air_temperature(snapshots: list[dict]) -> list[Finding]:
     return findings
 
 
+def _snapshot_data_score(snap: dict) -> int:
+    """Count how many meaningful operational fields are non-null in a snapshot.
+
+    Used to determine if a snapshot has enough data to be worth analysing.
+    Each distinct data point that would actually affect an energy analysis
+    increments the score by 1.
+    """
+    score = 0
+    c = snap.get("conditions") or {}
+    if c.get("oat_f") is not None:
+        score += 1
+    if c.get("rh_pct") is not None:
+        score += 1
+
+    hp = snap.get("heating_plant") or {}
+    if hp.get("hws_temp_actual_f") is not None:
+        score += 1
+    if hp.get("hws_temp_setpoint_f") is not None:
+        score += 1
+    if hp.get("vav_heat_request_pct") is not None:
+        score += 1
+
+    cp = snap.get("cooling_plant") or {}
+    if cp.get("chws_temp_actual_f") is not None:
+        score += 1
+    if cp.get("chws_temp_setpoint_f") is not None:
+        score += 1
+
+    for system in snap.get("air_systems") or []:
+        temps = system.get("temperatures") or {}
+        if temps.get("supply_air_actual_f") is not None:
+            score += 1
+        if temps.get("return_air_f") is not None:
+            score += 1
+        if system.get("sa_static_pressure_actual_inwc") is not None:
+            score += 1
+        if system.get("vav_demand_pct") is not None:
+            score += 1
+        for fan in system.get("fans") or []:
+            if fan.get("vfd_pct") is not None:
+                score += 1
+
+    for zone in snap.get("zones") or []:
+        if zone.get("space_temp_actual_f") is not None:
+            score += 1
+
+    return score
+
+
+def _filter_useful_snapshots(
+    snapshots: list[dict],
+    building_id: str,
+) -> list[dict]:
+    """Return only snapshots that have enough operational data to analyse.
+
+    Filters out snapshots where:
+    - The classifier marked the image as not a BMS screenshot, OR
+    - The data score is below _MIN_DATA_SCORE (essentially all-null extraction).
+
+    Logs a warning for each filtered snapshot so it can be traced.
+    """
+    useful = []
+    for snap in snapshots:
+        ts = snap.get("timestamp", "unknown")
+        classifier = snap.get("classifier") or {}
+
+        if classifier.get("is_bms_screenshot") is False:
+            logger.warning(
+                "Skipping snapshot %s / %s: classifier says not a BMS screenshot (%s)",
+                building_id,
+                ts,
+                classifier.get("reason", "no reason given"),
+            )
+            continue
+
+        score = _snapshot_data_score(snap)
+        if score < _MIN_DATA_SCORE:
+            logger.warning(
+                "Skipping snapshot %s / %s: data score %d < %d (too many nulls). "
+                "Classifier fields present: %s",
+                building_id,
+                ts,
+                score,
+                _MIN_DATA_SCORE,
+                classifier.get("structured_fields_present", []),
+            )
+            continue
+
+        useful.append(snap)
+    return useful
+
+
 def run_deterministic_checks(snapshots: list[dict]) -> list[Finding]:
     """Run all deterministic rule checks and return deduplicated findings."""
     findings: list[Finding] = []
@@ -480,14 +575,34 @@ def analyze_building(
 ) -> dict:
     """Produce a full analysis-output schema document for one building.
 
+    Reads only from the pre-extracted snapshot dicts — no images are re-ingested.
+
     Steps:
-      1. Run deterministic checks.
-      2. Call LLM with all context to produce ECMs and narrative.
-      3. Recompute totals block using utils.aggregate_totals for auditability.
+      1. Filter snapshots to those with sufficient operational data.
+      2. Run deterministic rule checks on the filtered set.
+      3. Call LLM (text-only) to synthesise ECMs and narrative.
+      4. Recompute totals block via utils.aggregate_totals for arithmetic auditability.
+
+    Raises:
+        ValueError: if no snapshots survive the data-quality filter.
     """
+    useful = _filter_useful_snapshots(snapshots, building_id)
+    if not useful:
+        logger.error(
+            "Skipping analysis for building %s: all %d snapshot(s) failed data-quality "
+            "filter (too many null fields or classifier rejected). "
+            "Re-run Stage 1 extraction with better source images to get usable data.",
+            building_id,
+            len(snapshots),
+        )
+        raise ValueError(
+            f"No usable snapshots for building {building_id!r} — "
+            "all snapshots are below the minimum data score or were classifier-rejected."
+        )
+
     api_client = _get_client(client)
     f = factors or DEFAULT_FACTORS
-    findings = run_deterministic_checks(snapshots)
+    findings = run_deterministic_checks(useful)
 
     prompt = f"""You are an expert commercial building energy analyst. Analyze the BMS data below
 and produce a complete energy efficiency analysis in the exact JSON format defined by the output schema.
@@ -501,8 +616,8 @@ and produce a complete energy efficiency analysis in the exact JSON format defin
 ## Energy Factors (use these for all cost/carbon calculations)
 {json.dumps(f, indent=2)}
 
-## BMS Snapshot Data
-{_snapshots_summary(snapshots)}
+## BMS Snapshot Data ({len(useful)} of {len(snapshots)} snapshots passed data-quality filter)
+{_snapshots_summary(useful)}
 
 ## Deterministic Pre-Checks (already computed — incorporate these as ECMs where relevant)
 {_findings_summary(findings)}

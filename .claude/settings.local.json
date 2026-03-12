@@ -6,7 +6,8 @@
       "Bash(cat /Users/davemcrench/Projects/gridium-bms-ai-pipeline/.env*)",
       "Bash(rm:*)",
       "Bash(python3:*)",
-      "Bash(shuf:*)"
+      "Bash(shuf:*)",
+      "Bash(xargs basename:*)"
     ]
   }
 }

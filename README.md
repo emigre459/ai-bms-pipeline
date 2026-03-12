@@ -23,6 +23,3 @@ TODO: add images to references/ directory that can be shown in README here for p
 
 ## Design Document
 Please see the [Design Document](references/design_notes.md) for details on how I structured this project and the other information requested.
-
-
-, tradeoffs I made, what I'd do differently with more time, and the production-readiness of this system.

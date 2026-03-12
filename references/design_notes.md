@@ -12,8 +12,9 @@ The current image classifier gate (`is_bms_screenshot`) is intentionally kept si
 Why classifier outputs can be flaky in this version:
 - The gate is a single LLM vision decision on a fuzzy boundary (what counts as "BMS-relevant").
 - Borderline screenshots (partial UI, floor plans, weak telemetry context, blurry captures) are inherently ambiguous.
-- Structured-output fallbacks can introduce response-shape variability when model or schema constraints are hit.
 - There is no confidence calibration layer or deterministic pre-filter before the LLM call.
+
+In truth, the classifier is a very rough "first filter" but can result in structured data that is essentially all nulls when returns a false positive. The analysis stage is useful as it runs a secondary effective filter based on the structured results (e.g. more than X nulls will result in it assuming the original image was not operationally-relevant and that it is a false positive from stage 1).
 
 - Prototype classifier quality metric (fill in later):
   - Current classifier F1 on labeled validation set: **[PLACEHOLDER - TO BE MEASURED]**
@@ -37,6 +38,9 @@ Known ways to improve classifier reliability:
 
 ## Stage 2
 - Add allowable values (for constrained fields) as explict lists in the YAML configs instead of just capturing them as inline comments. This will allow more consistency
+
+## General
+To enhance user-friendliness for both analysts and their audiences (e.g. building owners), it would make a lot of sense to add a proper front end to this system (e.g. React.ts) that enables both visualization of the pipeline steps (tracing input image to output analysis and each step in between) for human evaluation, but a chat interfacewith an expert analyst agent that includes web searching at a minimum as an agent tool. Being able to ask more information about source citations (e.g. for electricity cost data) or even throw an idea in for new savings opportunities that were never explored before (e.g. adding another element to `analysis_domains.md` and an expert agent to own it that could be called upon as needed based on the conversation). Generally speaking for agentic AI, some of the most interesting innovations yet to be realized are in the UI/UX. GitHub Copilot was such a success early on not just because it enabled "hyper autocomplete" but because it didn't try to provide value initially through a chat box alone: it provided inline support and accleration of existing workflows before helping define entirely new workflows. 
 
 # Evaluating the system's production-readiness
 ## Stage 1

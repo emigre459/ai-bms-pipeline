@@ -91,11 +91,21 @@ def run(
         out_file = out_path / f"{_safe_filename(building_id)}.json"
         try:
             if dry_run:
-                findings = analysis_module.run_deterministic_checks(snapshots)
+                useful = analysis_module._filter_useful_snapshots(
+                    snapshots, building_id
+                )
+                if not useful:
+                    logger.error(
+                        "Skipping building %s: no snapshots passed data-quality filter.",
+                        building_id,
+                    )
+                    return None
+                findings = analysis_module.run_deterministic_checks(useful)
                 result = {
                     "building_id": building_id,
                     "dry_run": True,
                     "snapshot_count": len(snapshots),
+                    "useful_snapshot_count": len(useful),
                     "deterministic_findings": [
                         {
                             "domain": f.domain,
