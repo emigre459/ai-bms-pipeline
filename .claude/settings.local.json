@@ -7,7 +7,9 @@
       "Bash(rm:*)",
       "Bash(python3:*)",
       "Bash(shuf:*)",
-      "Bash(xargs basename:*)"
+      "Bash(xargs basename:*)",
+      "Bash(wait:*)",
+      "Bash(pkill:*)"
     ]
   }
 }

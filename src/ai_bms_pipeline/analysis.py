@@ -516,6 +516,91 @@ def _analysis_output_schema_text() -> str:
     return schema_path.read_text(encoding="utf-8")
 
 
+def _analysis_output_json_schema() -> dict:
+    """Minimal JSON schema for Anthropic structured output enforcement.
+
+    Only constrains the fields that matter most: ECM enum values and the
+    energy quantities that aggregate_totals reads. The totals/factors/regulatory
+    blocks are injected or recomputed deterministically after the LLM call, so
+    they are not included in the schema to keep grammar size within API limits.
+    """
+    nullable_number = {"type": ["number", "null"]}
+    nullable_string = {"type": ["string", "null"]}
+
+    ecm_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "id": {"type": "string"},
+            "name": {"type": "string"},
+            "category": {
+                "type": "string",
+                "enum": [
+                    "scheduling",
+                    "setpoint_reset",
+                    "controls_sequence",
+                    "recommissioning",
+                    "equipment_upgrade",
+                    "lighting",
+                    "plug_load",
+                    "envelope",
+                    "other",
+                ],
+            },
+            "description": {"type": "string"},
+            "affected_systems": {"type": "array", "items": {"type": "string"}},
+            "assumptions": {"type": "array", "items": {"type": "string"}},
+            # Flat energy quantities — aggregate_totals reads these paths
+            "kwh_yr": nullable_number,
+            "therms_yr": nullable_number,
+            "mlb_yr": nullable_number,
+            "capital_cost_usd": nullable_number,
+            "complexity": {"type": "string", "enum": ["low", "medium", "high"]},
+            "priority": {"type": "string", "enum": ["high", "medium", "low"]},
+            "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+            "implementation_notes": nullable_string,
+        },
+        "required": [
+            "id",
+            "name",
+            "category",
+            "description",
+            "affected_systems",
+            "assumptions",
+            "kwh_yr",
+            "therms_yr",
+            "mlb_yr",
+            "capital_cost_usd",
+            "complexity",
+            "priority",
+            "confidence",
+            "implementation_notes",
+        ],
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "building_id": {"type": "string"},
+            "analysis_date": {"type": "string"},
+            "analyst_notes": nullable_string,
+            "ecms": {"type": "array", "items": ecm_schema},
+            "key_findings": {"type": "array", "items": {"type": "string"}},
+            "priority_actions": {"type": "array", "items": {"type": "string"}},
+            "open_questions": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": [
+            "building_id",
+            "analysis_date",
+            "analyst_notes",
+            "ecms",
+            "key_findings",
+            "priority_actions",
+            "open_questions",
+        ],
+    }
+
+
 def _analysis_domains_text() -> str:
     domains_path = (
         Path(__file__).resolve().parents[2] / "references" / "analysis_domains.md"
@@ -604,14 +689,15 @@ def analyze_building(
     f = factors or DEFAULT_FACTORS
     findings = run_deterministic_checks(useful)
 
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     prompt = f"""You are an expert commercial building energy analyst. Analyze the BMS data below
-and produce a complete energy efficiency analysis in the exact JSON format defined by the output schema.
+and produce a complete energy efficiency analysis as JSON.
 
 ## Building ID
 {building_id}
 
 ## Analysis Date
-{datetime.now(timezone.utc).strftime("%Y-%m-%d")}
+{today}
 
 ## Energy Factors (use these for all cost/carbon calculations)
 {json.dumps(f, indent=2)}
@@ -625,60 +711,79 @@ and produce a complete energy efficiency analysis in the exact JSON format defin
 ## Analysis Domains to Cover
 {_analysis_domains_text()}
 
-## Output Schema (follow this structure exactly)
-{_analysis_output_schema_text()}
+## ECM Output Format
+Each ECM in the `ecms` array must have these fields:
+- id: short snake_case identifier
+- name: human-readable name
+- category: one of scheduling|setpoint_reset|controls_sequence|recommissioning|equipment_upgrade|lighting|plug_load|envelope|other
+- description: 2-4 sentences
+- affected_systems: list of system names
+- assumptions: list of key assumptions made
+- kwh_yr: annual electricity savings in kWh (number or null)
+- therms_yr: annual gas savings in therms (number or null)
+- mlb_yr: annual steam savings in Mlb (number or null)
+- capital_cost_usd: estimated capital cost in USD (number or null)
+- complexity: low|medium|high
+- priority: high|medium|low
+- confidence: high|medium|low
+- implementation_notes: brief notes on implementation approach (string or null)
 
 ## Instructions
-- Produce a JSON object matching the output schema above. Output ONLY valid JSON — no markdown, no explanation.
-- For each ECM: write 2–4 sentences in `description`, list key assumptions, and compute savings using the
-  provided factors. Use savings ranges (kwh_yr_range) when estimates have meaningful uncertainty.
-- Savings arithmetic: cost = energy_quantity × factor_rate, carbon = energy_quantity × co2e_factor.
-  payback_years = capital_cost_usd / savings.total.cost_usd_yr.
+- Compute savings using: cost = energy_qty × factor_rate, carbon = energy_qty × co2e_factor.
+- Set kwh_yr/therms_yr/mlb_yr to null for commodities this ECM doesn't affect.
 - Confidence: "high" = clear measured data; "medium" = estimated from BMS + typical values; "low" = rough order-of-magnitude.
-- If data is sparse, still produce the analysis — note data gaps in open_questions and lower confidence.
+- If data is sparse, note data gaps in open_questions and use lower confidence.
 - Include at least 3 key_findings and 3 priority_actions.
-- Omit regulatory_impact unless you have specific jurisdiction data.
-- The totals block will be recomputed from ECMs, so populate it with your best estimates — they will be
-  verified and replaced by the pipeline's arithmetic.
-- Do not fabricate building characteristics (area, occupancy) unless they can be inferred from the data.
-  Use explicit assumptions[] to document any values you infer or borrow from industry norms.
+- Do not fabricate building characteristics unless inferable from data; document inferences in assumptions[].
 """
 
+    output_schema = _analysis_output_json_schema()
     messages = [{"role": "user", "content": prompt}]
     for max_tokens in (6000, 10000):
         response = api_client.messages.create(
             model=model,
             max_tokens=max_tokens,
+            output_config={"format": {"type": "json_schema", "schema": output_schema}},
             messages=messages,
         )
         if getattr(response, "stop_reason", None) != "max_tokens":
             break
 
-    raw_text = "".join(
-        getattr(block, "text", "")
-        for block in response.content
-        if hasattr(block, "text")
-    ).strip()
+    from ai_bms_pipeline.image_ingest import _extract_json_from_response
+    from ai_bms_pipeline.utils import ecm_savings_block, simple_payback
 
-    # Strip markdown code fences if model wrapped in them
-    if raw_text.startswith("```"):
-        raw_text = raw_text.split("\n", 1)[-1]
-        if raw_text.endswith("```"):
-            raw_text = raw_text.rsplit("```", 1)[0]
+    analysis = _extract_json_from_response(response)
 
-    analysis = json.loads(raw_text)
-
-    # Recompute totals deterministically from ECM savings blocks
+    # Expand flat ECM fields into proper nested savings/implementation blocks
     ecms = analysis.get("ecms") or []
-    if ecms:
-        analysis["totals"] = aggregate_totals(ecms, f)
+    for ecm in ecms:
+        kwh = ecm.pop("kwh_yr", None)
+        therms = ecm.pop("therms_yr", None)
+        mlb = ecm.pop("mlb_yr", None)
+        capital = ecm.pop("capital_cost_usd", None)
+        complexity = ecm.pop("complexity", "medium")
+        impl_notes = ecm.pop("implementation_notes", None)
 
-    # Ensure required header fields
-    analysis.setdefault("building_id", building_id)
-    analysis.setdefault(
-        "analysis_date", datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    )
-    analysis.setdefault("factors", f)
+        ecm["savings"] = ecm_savings_block(
+            kwh_yr=kwh, therms_yr=therms, mlb_yr=mlb, factors=f
+        )
+        total_cost = ecm["savings"]["total"]["cost_usd_yr"]
+        ecm["implementation"] = {
+            "capital_cost_usd": round(capital, 2) if capital is not None else None,
+            "requires_capital": capital is not None and capital > 0,
+            "complexity": complexity,
+            "payback_years": simple_payback(capital, total_cost) if capital else None,
+            "notes": impl_notes,
+        }
+
+    # Recompute totals deterministically from expanded ECM savings blocks
+    analysis["totals"] = aggregate_totals(ecms, f)
+
+    # Inject fields that are computed by code, not the LLM
+    analysis["building_id"] = building_id
+    analysis["analysis_date"] = today
+    analysis["factors"] = f
+    analysis.setdefault("regulatory_impact", None)
 
     return analysis
 

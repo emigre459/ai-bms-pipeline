@@ -208,12 +208,24 @@ def aggregate_totals(ecms: list[dict], factors: dict | None = None) -> dict:
     }
 
     for ecm in ecms:
-        savings = ecm.get("savings", {})
-        total_kwh += (savings.get("electricity") or {}).get("kwh_yr", 0) or 0
-        total_therms += (savings.get("gas") or {}).get("therms_yr", 0) or 0
-        total_mlb += (savings.get("steam") or {}).get("mlb_yr", 0) or 0
+        # Support both flat ECM format (kwh_yr at top level) and nested savings blocks
+        savings = ecm.get("savings") or {}
+        kwh = (
+            ecm.get("kwh_yr")
+            or (savings.get("electricity") or {}).get("kwh_yr", 0)
+            or 0
+        )
+        therms = (
+            ecm.get("therms_yr") or (savings.get("gas") or {}).get("therms_yr", 0) or 0
+        )
+        mlb = ecm.get("mlb_yr") or (savings.get("steam") or {}).get("mlb_yr", 0) or 0
+        total_kwh += kwh or 0
+        total_therms += therms or 0
+        total_mlb += mlb or 0
 
-        capital = (ecm.get("implementation") or {}).get("capital_cost_usd")
+        capital = ecm.get("capital_cost_usd") or (ecm.get("implementation") or {}).get(
+            "capital_cost_usd"
+        )
         if capital is not None:
             total_capital += capital
             has_capital = True

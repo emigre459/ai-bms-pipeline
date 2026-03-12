@@ -12,7 +12,7 @@ TODO: add env setup (python) steps
 
 
 ## Running the code
-Simply run `uv run main.py` and you're off to the races!
+Simply run `uv run scripts/pipeline_example.py` and you're off to the races!
 
 # Deliverables
 As requested, please find information about the deliverables specified in the assignment below (beyond this README itself).
