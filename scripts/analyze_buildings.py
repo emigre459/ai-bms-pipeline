@@ -5,6 +5,7 @@ Reads all JSON files under data/extracted_from_images/ (one subdir per building)
 runs deterministic checks + LLM analysis, and writes one analysis JSON per building
 to data/analyses/<building_id>.json.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -21,6 +22,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import dotenv
+
 dotenv.load_dotenv(PROJECT_ROOT / ".env")
 
 from ai_bms_pipeline import analysis as analysis_module
@@ -75,9 +77,7 @@ def run(
     # Filter if specific building IDs requested
     if building_ids:
         all_buildings = {
-            bid: snaps
-            for bid, snaps in all_buildings.items()
-            if bid in building_ids
+            bid: snaps for bid, snaps in all_buildings.items() if bid in building_ids
         }
 
     if not all_buildings:
@@ -121,10 +121,7 @@ def run(
 
     items = list(all_buildings.items())
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {
-            pool.submit(_process, bid, snaps): bid
-            for bid, snaps in items
-        }
+        futures = {pool.submit(_process, bid, snaps): bid for bid, snaps in items}
         for future in tqdm(
             as_completed(futures),
             total=len(futures),

@@ -9,17 +9,18 @@ Schema reference (analysis-output.schema.yaml):
   savings.steam.co2e_tons_yr       = mlb_yr × factors.steam.co2e_tons_per_mlb
   implementation.payback_years     = capital_cost_usd / savings.total.cost_usd_yr
 """
+
 from __future__ import annotations
 
 # ─── Default US commercial energy factors ────────────────────────────────────
 # Used when building-specific rates are unknown.
 
-DEFAULT_ELECTRICITY_RATE_USD_KWH: float = 0.12       # EIA 2024 commercial avg
+DEFAULT_ELECTRICITY_RATE_USD_KWH: float = 0.12  # EIA 2024 commercial avg
 DEFAULT_ELECTRICITY_CO2E_TONS_PER_KWH: float = 0.000386  # eGRID 2023 US avg
-DEFAULT_GAS_RATE_USD_THERM: float = 0.80             # EIA 2024 commercial avg
+DEFAULT_GAS_RATE_USD_THERM: float = 0.80  # EIA 2024 commercial avg
 DEFAULT_GAS_CO2E_TONS_PER_THERM: float = 0.00005311  # EPA 40 CFR Part 98
-DEFAULT_STEAM_RATE_USD_MLB: float = 32.00            # ~ConEd NYC district steam
-DEFAULT_STEAM_CO2E_TONS_PER_MLB: float = 0.04493     # ConEd district steam estimate
+DEFAULT_STEAM_RATE_USD_MLB: float = 32.00  # ~ConEd NYC district steam
+DEFAULT_STEAM_CO2E_TONS_PER_MLB: float = 0.04493  # ConEd district steam estimate
 
 DEFAULT_FACTORS: dict = {
     "electricity": {
@@ -132,8 +133,12 @@ def ecm_savings_block(
     total_co2e = 0.0
 
     if kwh_yr is not None and kwh_yr > 0:
-        cost = electricity_cost(kwh_yr, el_f.get("rate_usd_kwh", DEFAULT_ELECTRICITY_RATE_USD_KWH))
-        co2e = electricity_carbon(kwh_yr, el_f.get("co2e_tons_per_kwh", DEFAULT_ELECTRICITY_CO2E_TONS_PER_KWH))
+        cost = electricity_cost(
+            kwh_yr, el_f.get("rate_usd_kwh", DEFAULT_ELECTRICITY_RATE_USD_KWH)
+        )
+        co2e = electricity_carbon(
+            kwh_yr, el_f.get("co2e_tons_per_kwh", DEFAULT_ELECTRICITY_CO2E_TONS_PER_KWH)
+        )
         result["electricity"] = {
             "kwh_yr": round(kwh_yr, 1),
             "kwh_yr_range": list(kwh_yr_range) if kwh_yr_range else None,
@@ -144,8 +149,12 @@ def ecm_savings_block(
         total_co2e += co2e
 
     if therms_yr is not None and therms_yr > 0:
-        cost = gas_cost(therms_yr, gas_f.get("rate_usd_therm", DEFAULT_GAS_RATE_USD_THERM))
-        co2e = gas_carbon(therms_yr, gas_f.get("co2e_tons_per_therm", DEFAULT_GAS_CO2E_TONS_PER_THERM))
+        cost = gas_cost(
+            therms_yr, gas_f.get("rate_usd_therm", DEFAULT_GAS_RATE_USD_THERM)
+        )
+        co2e = gas_carbon(
+            therms_yr, gas_f.get("co2e_tons_per_therm", DEFAULT_GAS_CO2E_TONS_PER_THERM)
+        )
         result["gas"] = {
             "therms_yr": round(therms_yr, 1),
             "therms_yr_range": list(therms_yr_range) if therms_yr_range else None,
@@ -157,7 +166,9 @@ def ecm_savings_block(
 
     if mlb_yr is not None and mlb_yr > 0:
         cost = steam_cost(mlb_yr, stm_f.get("rate_usd_mlb", DEFAULT_STEAM_RATE_USD_MLB))
-        co2e = steam_carbon(mlb_yr, stm_f.get("co2e_tons_per_mlb", DEFAULT_STEAM_CO2E_TONS_PER_MLB))
+        co2e = steam_carbon(
+            mlb_yr, stm_f.get("co2e_tons_per_mlb", DEFAULT_STEAM_CO2E_TONS_PER_MLB)
+        )
         result["steam"] = {
             "mlb_yr": round(mlb_yr, 1),
             "mlb_yr_range": list(mlb_yr_range) if mlb_yr_range else None,
@@ -213,12 +224,24 @@ def aggregate_totals(ecms: list[dict], factors: dict | None = None) -> dict:
         else:
             category_counts["other"] += 1
 
-    el_cost = electricity_cost(total_kwh, el_f.get("rate_usd_kwh", DEFAULT_ELECTRICITY_RATE_USD_KWH))
-    el_co2e = electricity_carbon(total_kwh, el_f.get("co2e_tons_per_kwh", DEFAULT_ELECTRICITY_CO2E_TONS_PER_KWH))
-    gas_cost_tot = gas_cost(total_therms, gas_f.get("rate_usd_therm", DEFAULT_GAS_RATE_USD_THERM))
-    gas_co2e = gas_carbon(total_therms, gas_f.get("co2e_tons_per_therm", DEFAULT_GAS_CO2E_TONS_PER_THERM))
-    stm_cost_tot = steam_cost(total_mlb, stm_f.get("rate_usd_mlb", DEFAULT_STEAM_RATE_USD_MLB))
-    stm_co2e = steam_carbon(total_mlb, stm_f.get("co2e_tons_per_mlb", DEFAULT_STEAM_CO2E_TONS_PER_MLB))
+    el_cost = electricity_cost(
+        total_kwh, el_f.get("rate_usd_kwh", DEFAULT_ELECTRICITY_RATE_USD_KWH)
+    )
+    el_co2e = electricity_carbon(
+        total_kwh, el_f.get("co2e_tons_per_kwh", DEFAULT_ELECTRICITY_CO2E_TONS_PER_KWH)
+    )
+    gas_cost_tot = gas_cost(
+        total_therms, gas_f.get("rate_usd_therm", DEFAULT_GAS_RATE_USD_THERM)
+    )
+    gas_co2e = gas_carbon(
+        total_therms, gas_f.get("co2e_tons_per_therm", DEFAULT_GAS_CO2E_TONS_PER_THERM)
+    )
+    stm_cost_tot = steam_cost(
+        total_mlb, stm_f.get("rate_usd_mlb", DEFAULT_STEAM_RATE_USD_MLB)
+    )
+    stm_co2e = steam_carbon(
+        total_mlb, stm_f.get("co2e_tons_per_mlb", DEFAULT_STEAM_CO2E_TONS_PER_MLB)
+    )
 
     total_cost = round(el_cost + gas_cost_tot + stm_cost_tot, 2)
     total_co2e = round(el_co2e + gas_co2e + stm_co2e, 4)

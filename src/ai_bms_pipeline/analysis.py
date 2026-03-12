@@ -7,6 +7,7 @@ Strategy:
      uses the deterministic findings as grounded evidence, adds qualitative
      observations, and produces the full analysis-output schema payload.
 """
+
 from __future__ import annotations
 
 import json
@@ -30,7 +31,7 @@ class Finding:
     domain: str
     description: str
     affected_systems: list[str] = field(default_factory=list)
-    severity: str = "medium"          # high | medium | low
+    severity: str = "medium"  # high | medium | low
     evidence: dict[str, Any] = field(default_factory=dict)
 
 
@@ -50,29 +51,38 @@ def _check_hws_reset(snapshots: list[dict]) -> list[Finding]:
         )
 
         if hws_act is not None and hws_act > 130 and oat is not None and oat > 45:
-            findings.append(Finding(
-                domain="hws_reset",
-                description=(
-                    f"HWS actual {hws_act}°F while OAT is {oat}°F — "
-                    "water temperature is elevated for the ambient condition."
-                ),
-                affected_systems=["heating_plant"],
-                severity="high",
-                evidence={"hws_temp_actual_f": hws_act, "oat_f": oat,
-                          "reset_configured": reset_configured},
-            ))
+            findings.append(
+                Finding(
+                    domain="hws_reset",
+                    description=(
+                        f"HWS actual {hws_act}°F while OAT is {oat}°F — "
+                        "water temperature is elevated for the ambient condition."
+                    ),
+                    affected_systems=["heating_plant"],
+                    severity="high",
+                    evidence={
+                        "hws_temp_actual_f": hws_act,
+                        "oat_f": oat,
+                        "reset_configured": reset_configured,
+                    },
+                )
+            )
         elif hws_set is not None and hws_set > 140 and not reset_configured:
-            findings.append(Finding(
-                domain="hws_reset",
-                description=(
-                    f"HWS setpoint is fixed at {hws_set}°F with no OAT-reset curve — "
-                    "boiler likely firing to maintain elevated temperatures on mild days."
-                ),
-                affected_systems=["heating_plant"],
-                severity="medium",
-                evidence={"hws_temp_setpoint_f": hws_set,
-                          "reset_configured": reset_configured},
-            ))
+            findings.append(
+                Finding(
+                    domain="hws_reset",
+                    description=(
+                        f"HWS setpoint is fixed at {hws_set}°F with no OAT-reset curve — "
+                        "boiler likely firing to maintain elevated temperatures on mild days."
+                    ),
+                    affected_systems=["heating_plant"],
+                    severity="medium",
+                    evidence={
+                        "hws_temp_setpoint_f": hws_set,
+                        "reset_configured": reset_configured,
+                    },
+                )
+            )
     return findings
 
 
@@ -80,31 +90,32 @@ def _check_fan_imbalance(snapshots: list[dict]) -> list[Finding]:
     """Multiple fans in the same system running at materially different VFD speeds."""
     findings: list[Finding] = []
     for snap in snapshots:
-        for system in (snap.get("air_systems") or []):
+        for system in snap.get("air_systems") or []:
             fans = [
-                f for f in (system.get("fans") or [])
-                if f.get("vfd_pct") is not None
+                f for f in (system.get("fans") or []) if f.get("vfd_pct") is not None
             ]
             if len(fans) < 2:
                 continue
             speeds = [f["vfd_pct"] for f in fans]
             spread = max(speeds) - min(speeds)
             if spread > 15:
-                findings.append(Finding(
-                    domain="fan_balancing",
-                    description=(
-                        f"Fan speeds in {system['id']} span {spread:.0f}% "
-                        f"({min(speeds):.0f}%–{max(speeds):.0f}%). "
-                        "Speed imbalance causes backpressure and energy waste."
-                    ),
-                    affected_systems=[system["id"]],
-                    severity="high" if spread > 30 else "medium",
-                    evidence={
-                        "system_id": system["id"],
-                        "fan_speeds": {f["id"]: f["vfd_pct"] for f in fans},
-                        "spread_pct": spread,
-                    },
-                ))
+                findings.append(
+                    Finding(
+                        domain="fan_balancing",
+                        description=(
+                            f"Fan speeds in {system['id']} span {spread:.0f}% "
+                            f"({min(speeds):.0f}%–{max(speeds):.0f}%). "
+                            "Speed imbalance causes backpressure and energy waste."
+                        ),
+                        affected_systems=[system["id"]],
+                        severity="high" if spread > 30 else "medium",
+                        evidence={
+                            "system_id": system["id"],
+                            "fan_speeds": {f["id"]: f["vfd_pct"] for f in fans},
+                            "spread_pct": spread,
+                        },
+                    )
+                )
     return findings
 
 
@@ -114,7 +125,7 @@ def _check_economizer(snapshots: list[dict]) -> list[Finding]:
     for snap in snapshots:
         oat = (snap.get("conditions") or {}).get("oat_f")
         rh = (snap.get("conditions") or {}).get("rh_pct")
-        for system in (snap.get("air_systems") or []):
+        for system in snap.get("air_systems") or []:
             econ = system.get("economizer") or {}
             active = econ.get("active")
             pos = econ.get("position_pct")
@@ -122,39 +133,51 @@ def _check_economizer(snapshots: list[dict]) -> list[Finding]:
 
             # Missed free-cooling: OAT below return air and economizer closed/disabled
             if (
-                oat is not None and rat is not None
+                oat is not None
+                and rat is not None
                 and oat < rat - 5
                 and (active is False or pos == 0.0)
             ):
-                findings.append(Finding(
-                    domain="economizer",
-                    description=(
-                        f"OAT ({oat}°F) is {rat - oat:.0f}°F below return air ({rat}°F) "
-                        f"but economizer for {system['id']} is closed/disabled — "
-                        "free cooling opportunity missed."
-                    ),
-                    affected_systems=[system["id"]],
-                    severity="high",
-                    evidence={"oat_f": oat, "return_air_f": rat,
-                              "economizer_active": active, "position_pct": pos},
-                ))
+                findings.append(
+                    Finding(
+                        domain="economizer",
+                        description=(
+                            f"OAT ({oat}°F) is {rat - oat:.0f}°F below return air ({rat}°F) "
+                            f"but economizer for {system['id']} is closed/disabled — "
+                            "free cooling opportunity missed."
+                        ),
+                        affected_systems=[system["id"]],
+                        severity="high",
+                        evidence={
+                            "oat_f": oat,
+                            "return_air_f": rat,
+                            "economizer_active": active,
+                            "position_pct": pos,
+                        },
+                    )
+                )
 
             # Humidity risk: economizer open when RH is high
             if (
-                rh is not None and rh > 70
-                and active is True and pos is not None and pos > 30
+                rh is not None
+                and rh > 70
+                and active is True
+                and pos is not None
+                and pos > 30
             ):
-                findings.append(Finding(
-                    domain="economizer",
-                    description=(
-                        f"Economizer for {system['id']} is open ({pos:.0f}%) "
-                        f"while outdoor RH is {rh:.0f}% — "
-                        "humid outdoor air is increasing latent cooling load."
-                    ),
-                    affected_systems=[system["id"]],
-                    severity="medium",
-                    evidence={"rh_pct": rh, "position_pct": pos},
-                ))
+                findings.append(
+                    Finding(
+                        domain="economizer",
+                        description=(
+                            f"Economizer for {system['id']} is open ({pos:.0f}%) "
+                            f"while outdoor RH is {rh:.0f}% — "
+                            "humid outdoor air is increasing latent cooling load."
+                        ),
+                        affected_systems=[system["id"]],
+                        severity="medium",
+                        evidence={"rh_pct": rh, "position_pct": pos},
+                    )
+                )
     return findings
 
 
@@ -168,10 +191,7 @@ def _check_simultaneous_heat_cool(snapshots: list[dict]) -> list[Finding]:
 
         hws_act = hp.get("hws_temp_actual_f")
         vav_heat = hp.get("vav_heat_request_pct")
-        boilers_on = any(
-            (b.get("status") == "on")
-            for b in (hp.get("boilers") or [])
-        )
+        boilers_on = any((b.get("status") == "on") for b in (hp.get("boilers") or []))
         heating_active = (
             boilers_on
             or (hws_act is not None and hws_act > 120)
@@ -180,14 +200,12 @@ def _check_simultaneous_heat_cool(snapshots: list[dict]) -> list[Finding]:
 
         chws_act = cp.get("chws_temp_actual_f")
         cooling_units_on = any(
-            (u.get("status") == "on")
-            for u in (cp.get("units") or [])
+            (u.get("status") == "on") for u in (cp.get("units") or [])
         )
         cooling_active = chws_act is not None or cooling_units_on
 
         zone_reheat = any(
-            z.get("reheat_active") is True
-            for z in (snap.get("zones") or [])
+            z.get("reheat_active") is True for z in (snap.get("zones") or [])
         )
 
         if heating_active and cooling_active and oat is not None and oat > 50:
@@ -198,18 +216,20 @@ def _check_simultaneous_heat_cool(snapshots: list[dict]) -> list[Finding]:
                 "chws_temp_actual_f": chws_act,
                 "zone_reheat_detected": zone_reheat,
             }
-            findings.append(Finding(
-                domain="simultaneous_heat_cool",
-                description=(
-                    "Heating and cooling plants appear simultaneously active "
-                    f"with OAT at {oat}°F. "
-                    + ("Zone reheat also active. " if zone_reheat else "")
-                    + "Cross-system conditioning is one of the most wasteful HVAC patterns."
-                ),
-                affected_systems=["heating_plant", "cooling_plant"],
-                severity="high",
-                evidence=evidence,
-            ))
+            findings.append(
+                Finding(
+                    domain="simultaneous_heat_cool",
+                    description=(
+                        "Heating and cooling plants appear simultaneously active "
+                        f"with OAT at {oat}°F. "
+                        + ("Zone reheat also active. " if zone_reheat else "")
+                        + "Cross-system conditioning is one of the most wasteful HVAC patterns."
+                    ),
+                    affected_systems=["heating_plant", "cooling_plant"],
+                    severity="high",
+                    evidence=evidence,
+                )
+            )
     return findings
 
 
@@ -219,22 +239,28 @@ def _check_scheduling(snapshots: list[dict]) -> list[Finding]:
     for snap in snapshots:
         ts_str = snap.get("timestamp")
         try:
-            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")) if ts_str else None
+            ts = (
+                datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                if ts_str
+                else None
+            )
         except (ValueError, AttributeError):
             ts = None
 
-        for system in (snap.get("air_systems") or []):
+        for system in snap.get("air_systems") or []:
             if system.get("out_of_schedule") is True:
-                findings.append(Finding(
-                    domain="scheduling",
-                    description=(
-                        f"{system['id']} is flagged as running out-of-schedule. "
-                        "Verify whether the schedule matches actual occupancy."
-                    ),
-                    affected_systems=[system["id"]],
-                    severity="high",
-                    evidence={"out_of_schedule": True, "timestamp": ts_str},
-                ))
+                findings.append(
+                    Finding(
+                        domain="scheduling",
+                        description=(
+                            f"{system['id']} is flagged as running out-of-schedule. "
+                            "Verify whether the schedule matches actual occupancy."
+                        ),
+                        affected_systems=[system["id"]],
+                        severity="high",
+                        evidence={"out_of_schedule": True, "timestamp": ts_str},
+                    )
+                )
                 continue
 
             if ts and system.get("mode") == "occupied":
@@ -245,17 +271,23 @@ def _check_scheduling(snapshots: list[dict]) -> list[Finding]:
 
                 if is_weekend or is_off_hours:
                     context = "weekend" if is_weekend else f"{hour:02d}:00 local"
-                    findings.append(Finding(
-                        domain="scheduling",
-                        description=(
-                            f"{system['id']} is in occupied mode at {context} "
-                            f"({ts_str}). Verify this reflects actual occupancy."
-                        ),
-                        affected_systems=[system["id"]],
-                        severity="medium",
-                        evidence={"mode": "occupied", "timestamp": ts_str,
-                                  "is_weekend": is_weekend, "hour": hour},
-                    ))
+                    findings.append(
+                        Finding(
+                            domain="scheduling",
+                            description=(
+                                f"{system['id']} is in occupied mode at {context} "
+                                f"({ts_str}). Verify this reflects actual occupancy."
+                            ),
+                            affected_systems=[system["id"]],
+                            severity="medium",
+                            evidence={
+                                "mode": "occupied",
+                                "timestamp": ts_str,
+                                "is_weekend": is_weekend,
+                                "hour": hour,
+                            },
+                        )
+                    )
     return findings
 
 
@@ -263,7 +295,7 @@ def _check_static_pressure(snapshots: list[dict]) -> list[Finding]:
     """Static pressure elevated above setpoint at low VAV demand."""
     findings: list[Finding] = []
     for snap in snapshots:
-        for system in (snap.get("air_systems") or []):
+        for system in snap.get("air_systems") or []:
             sp_act = system.get("sa_static_pressure_actual_inwc")
             sp_set = system.get("sa_static_pressure_setpoint_inwc")
             vav = system.get("vav_demand_pct")
@@ -271,19 +303,28 @@ def _check_static_pressure(snapshots: list[dict]) -> list[Finding]:
             if sp_act is None or sp_set is None or sp_set == 0:
                 continue
             if sp_act > sp_set * 1.15 and (vav is None or vav < 80):
-                findings.append(Finding(
-                    domain="static_pressure",
-                    description=(
-                        f"{system['id']} static pressure actual {sp_act:.2f} in.wc "
-                        f"exceeds setpoint {sp_set:.2f} in.wc "
-                        + (f"at only {vav:.0f}% VAV demand." if vav is not None
-                           else "— VAV demand unknown.")
-                        + " Static pressure reset could allow fan slowdown."
-                    ),
-                    affected_systems=[system["id"]],
-                    severity="medium",
-                    evidence={"sp_actual": sp_act, "sp_setpoint": sp_set, "vav_demand_pct": vav},
-                ))
+                findings.append(
+                    Finding(
+                        domain="static_pressure",
+                        description=(
+                            f"{system['id']} static pressure actual {sp_act:.2f} in.wc "
+                            f"exceeds setpoint {sp_set:.2f} in.wc "
+                            + (
+                                f"at only {vav:.0f}% VAV demand."
+                                if vav is not None
+                                else "— VAV demand unknown."
+                            )
+                            + " Static pressure reset could allow fan slowdown."
+                        ),
+                        affected_systems=[system["id"]],
+                        severity="medium",
+                        evidence={
+                            "sp_actual": sp_act,
+                            "sp_setpoint": sp_set,
+                            "vav_demand_pct": vav,
+                        },
+                    )
+                )
     return findings
 
 
@@ -293,7 +334,7 @@ def _check_supply_air_temperature(snapshots: list[dict]) -> list[Finding]:
     for snap in snapshots:
         oat = (snap.get("conditions") or {}).get("oat_f")
         season = (snap.get("conditions") or {}).get("season")
-        for system in (snap.get("air_systems") or []):
+        for system in snap.get("air_systems") or []:
             temps = system.get("temperatures") or {}
             sa_act = temps.get("supply_air_actual_f")
             sa_set = temps.get("supply_air_setpoint_f")
@@ -302,34 +343,39 @@ def _check_supply_air_temperature(snapshots: list[dict]) -> list[Finding]:
                 continue
 
             if sa_set is not None and sa_act < sa_set - 3:
-                findings.append(Finding(
-                    domain="supply_air_temperature",
-                    description=(
-                        f"{system['id']} supply air actual {sa_act:.1f}°F is "
-                        f"{sa_set - sa_act:.1f}°F below setpoint {sa_set:.1f}°F — "
-                        "overcooling supply air increases heating/reheat demand downstream."
-                    ),
-                    affected_systems=[system["id"]],
-                    severity="medium",
-                    evidence={"sa_actual": sa_act, "sa_setpoint": sa_set},
-                ))
+                findings.append(
+                    Finding(
+                        domain="supply_air_temperature",
+                        description=(
+                            f"{system['id']} supply air actual {sa_act:.1f}°F is "
+                            f"{sa_set - sa_act:.1f}°F below setpoint {sa_set:.1f}°F — "
+                            "overcooling supply air increases heating/reheat demand downstream."
+                        ),
+                        affected_systems=[system["id"]],
+                        severity="medium",
+                        evidence={"sa_actual": sa_act, "sa_setpoint": sa_set},
+                    )
+                )
 
             if (
                 sa_act < 55
                 and season in ("heating", "shoulder")
-                and oat is not None and oat < 65
+                and oat is not None
+                and oat < 65
             ):
-                findings.append(Finding(
-                    domain="supply_air_temperature",
-                    description=(
-                        f"{system['id']} supply air is {sa_act:.1f}°F in {season} season "
-                        f"(OAT {oat:.0f}°F) — SAT reset would raise supply temperature "
-                        "as cooling demand drops, reducing reheat energy."
-                    ),
-                    affected_systems=[system["id"]],
-                    severity="medium",
-                    evidence={"sa_actual": sa_act, "oat_f": oat, "season": season},
-                ))
+                findings.append(
+                    Finding(
+                        domain="supply_air_temperature",
+                        description=(
+                            f"{system['id']} supply air is {sa_act:.1f}°F in {season} season "
+                            f"(OAT {oat:.0f}°F) — SAT reset would raise supply temperature "
+                            "as cooling demand drops, reducing reheat energy."
+                        ),
+                        affected_systems=[system["id"]],
+                        severity="medium",
+                        evidence={"sa_actual": sa_act, "oat_f": oat, "season": season},
+                    )
+                )
     return findings
 
 
@@ -356,20 +402,29 @@ def run_deterministic_checks(snapshots: list[dict]) -> list[Finding]:
         existing = seen.get(key)
         if existing is None or severity_rank[f.severity] > severity_rank[existing]:
             seen[key] = f.severity
-            deduped = [x for x in deduped if (x.domain, ",".join(sorted(x.affected_systems))) != key]
+            deduped = [
+                x
+                for x in deduped
+                if (x.domain, ",".join(sorted(x.affected_systems))) != key
+            ]
             deduped.append(f)
     return deduped
 
 
 # ─── LLM synthesis ────────────────────────────────────────────────────────────
 
+
 def _analysis_output_schema_text() -> str:
-    schema_path = Path(__file__).resolve().parents[2] / "conf" / "analysis-output.schema.yaml"
+    schema_path = (
+        Path(__file__).resolve().parents[2] / "conf" / "analysis-output.schema.yaml"
+    )
     return schema_path.read_text(encoding="utf-8")
 
 
 def _analysis_domains_text() -> str:
-    domains_path = Path(__file__).resolve().parents[2] / "references" / "analysis_domains.md"
+    domains_path = (
+        Path(__file__).resolve().parents[2] / "references" / "analysis_domains.md"
+    )
     return domains_path.read_text(encoding="utf-8")
 
 
@@ -379,6 +434,7 @@ _NOTES_MAX_CHARS = 400
 def _trim_snapshot_for_prompt(snap: dict) -> dict:
     """Strip verbose fields that inflate token count without aiding analysis."""
     import copy
+
     s = copy.deepcopy(snap)
     s.pop("classifier", None)
     for system in s.get("air_systems") or []:
@@ -484,7 +540,9 @@ and produce a complete energy efficiency analysis in the exact JSON format defin
             break
 
     raw_text = "".join(
-        getattr(block, "text", "") for block in response.content if hasattr(block, "text")
+        getattr(block, "text", "")
+        for block in response.content
+        if hasattr(block, "text")
     ).strip()
 
     # Strip markdown code fences if model wrapped in them
@@ -502,7 +560,9 @@ and produce a complete energy efficiency analysis in the exact JSON format defin
 
     # Ensure required header fields
     analysis.setdefault("building_id", building_id)
-    analysis.setdefault("analysis_date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    analysis.setdefault(
+        "analysis_date", datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    )
     analysis.setdefault("factors", f)
 
     return analysis
