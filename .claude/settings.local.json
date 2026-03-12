@@ -4,7 +4,9 @@
       "Bash(uv run:*)",
       "Read(//Users/davemcrench/**)",
       "Bash(cat /Users/davemcrench/Projects/gridium-bms-ai-pipeline/.env*)",
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "Bash(python3:*)",
+      "Bash(shuf:*)"
     ]
   }
 }
