@@ -22,7 +22,7 @@ timestamp: string                    # Required; ISO 8601; must not be null (e.g
 #   - Should the boiler be firing at this OAT?
 #   - Is static pressure appropriate for this load condition?
 
-conditions:                          # May be null if entirely unavailable
+conditions:                          # (optional) May be null if entirely unavailable
   oat_f: number | null               # Outdoor air temperature (°F), may be null if unknown
   rh_pct: number | null              # Outdoor relative humidity (%)
   season: string | null              # heating (winter) | cooling (summer) | shoulder (March-May, Sept-Nov) or null
@@ -33,7 +33,7 @@ conditions:                          # May be null if entirely unavailable
 # For parallel fan arrays, list each physical fan in fans[] so that speed
 # imbalances between units sharing a plenum are visible.
 
-air_systems:                         # May be null if there are no air systems found
+air_systems:                         # (optional) May be null if there are no air systems found
   - id: string                       # Required within air system; must not be null
 
     mode: string | null              # occupied | unoccupied | override | off
@@ -67,7 +67,7 @@ air_systems:                         # May be null if there are no air systems f
 # ─── HEATING PLANT ───────────────────────────────────────────────────────────
 # Current state of the heating plant. For district steam, boilers[] is omitted.
 
-heating_plant:
+heating_plant:                       # (optional)
 
   boilers:                              # May be null if district steam or unavailable
     - id: string                        # Required within boiler; must not be null
@@ -91,7 +91,7 @@ heating_plant:
 
 # ─── COOLING PLANT ───────────────────────────────────────────────────────────
 
-cooling_plant:
+cooling_plant:                       # (optional)
   chws_temp_actual_f: number | null
   chws_temp_setpoint_f: number | null
   oat_reset_active: boolean | null
@@ -106,7 +106,7 @@ cooling_plant:
 # ─── VAV ZONES ───────────────────────────────────────────────────────────────
 # Optional. Include when zone-level data is available and relevant.
 
-zones:                                  # May be null if no zones found
+zones:                                  # (optional) May be null if no zones found
   - id: string                          # Required within zone; must not be null
     name: string | null
     space_temp_actual_f: number | null
@@ -119,7 +119,7 @@ zones:                                  # May be null if no zones found
 # ─── ANOMALIES ───────────────────────────────────────────────────────────────
 # Pre-flagged observations to direct the LLM's attention.
 
-anomalies:                              # May be null if no anomalies detected
+anomalies:                              # (optional) May be null if no anomalies detected
   - system_id: string                   # Required within anomalies; must not be null
     description: string | null
     severity: string | null             # info | warning | critical

@@ -179,7 +179,13 @@ def test_yaml_to_anthropic_json_schema_extracts_enum_from_comment() -> None:
     mode_schema = json_schema["properties"]["air_systems"]["items"]["properties"][
         "mode"
     ]
-    assert mode_schema["enum"] == ["occupied", "unoccupied", "override", "off"]
+    # mode is nullable (string | null), so enum lives inside anyOf[0]
+    assert mode_schema["anyOf"][0]["enum"] == [
+        "occupied",
+        "unoccupied",
+        "override",
+        "off",
+    ]
 
 
 def test_timestamp_requires_timezone() -> None:
@@ -272,43 +278,42 @@ def test_is_bms_screenshot_mocked() -> None:
 
 
 def test_extract_bms_snapshot_mocked() -> None:
+    import json as _json
+
+    _snapshot = {
+        "building_id": "b1",
+        "timestamp": "2026-03-10T00:00:00Z",
+        "conditions": {"oat_f": 55, "rh_pct": None, "season": None},
+        "air_systems": [],
+        "heating_plant": {
+            "hws_temp_actual_f": None,
+            "hws_temp_setpoint_f": None,
+            "hws_oat_reset_active": {
+                "oat_min_f": None,
+                "oat_max_f": None,
+                "hws_min_f": None,
+                "hws_max_f": None,
+            },
+            "vav_heat_request_pct": None,
+        },
+        "cooling_plant": {
+            "chws_temp_actual_f": None,
+            "chws_temp_setpoint_f": None,
+            "oat_reset_active": None,
+        },
+        "anomalies": [],
+    }
+
     class FakeResponse:
         def __init__(self) -> None:
+            # Compact schema format: each item wraps the snapshot as a JSON string
             self.content = [
                 type(
                     "Block",
                     (),
                     {
                         "input": {
-                            "snapshots": [
-                                {
-                                    "building_id": "b1",
-                                    "timestamp": "2026-03-10T00:00:00Z",
-                                    "conditions": {
-                                        "oat_f": 55,
-                                        "rh_pct": None,
-                                        "season": None,
-                                    },
-                                    "air_systems": [],
-                                    "heating_plant": {
-                                        "hws_temp_actual_f": None,
-                                        "hws_temp_setpoint_f": None,
-                                        "hws_oat_reset_active": {
-                                            "oat_min_f": None,
-                                            "oat_max_f": None,
-                                            "hws_min_f": None,
-                                            "hws_max_f": None,
-                                        },
-                                        "vav_heat_request_pct": None,
-                                    },
-                                    "cooling_plant": {
-                                        "chws_temp_actual_f": None,
-                                        "chws_temp_setpoint_f": None,
-                                        "oat_reset_active": None,
-                                    },
-                                    "anomalies": [],
-                                }
-                            ]
+                            "snapshots": [{"snapshot_json": _json.dumps(_snapshot)}]
                         },
                     },
                 )

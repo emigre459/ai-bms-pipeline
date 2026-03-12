@@ -783,7 +783,7 @@ Each ECM in the `ecms` array must have these fields:
     analysis["building_id"] = building_id
     analysis["analysis_date"] = today
     analysis["factors"] = f
-    analysis.setdefault("regulatory_impact", None)
+    analysis.setdefault("regulatory_impact", [])
 
     return analysis
 

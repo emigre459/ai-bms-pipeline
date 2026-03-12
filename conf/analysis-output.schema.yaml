@@ -49,16 +49,7 @@ factors:
 ecms:
   - id: string                   # e.g. "ECM-01"
     name: string                 # Short label, e.g. "Static Pressure Reset"
-    category: string             # One of:
-                                 #   scheduling          — add/fix operating schedules
-                                 #   setpoint_reset      — OAT/load-based resets
-                                 #   controls_sequence   — logic change, no hardware
-                                 #   recommissioning     — restore design intent
-                                 #   equipment_upgrade   — capital replacement
-                                 #   lighting            — lighting controls or retrofits
-                                 #   plug_load           — plug load management
-                                 #   envelope            — insulation, glazing, etc.
-                                 #   other
+    category: string             # scheduling | setpoint_reset | controls_sequence | recommissioning | equipment_upgrade | lighting | plug_load | envelope | other
 
     description: string          # 2–4 sentences: what, why, how it saves energy
 
@@ -73,7 +64,7 @@ ecms:
       # Omit a block entirely if the ECM has no effect on that fuel.
       # range: [low, high] is optional — include when estimate has meaningful uncertainty.
 
-      electricity:
+      electricity:               # (optional)
         kwh_yr: number
         kwh_yr_range: "[number, number] | null"
         cost_usd_yr: number
@@ -103,17 +94,14 @@ ecms:
       notes: string | null               # Constraints, sequencing dependencies, etc.
 
     priority: string             # high | medium | low
-    confidence: string           # Savings estimate quality: high | medium | low
-                                 # high   = measured data, well-established method
-                                 # medium = estimated from BMS observations + typical values
-                                 # low    = rough order-of-magnitude, needs field verification
+    confidence: string           # high | medium | low
 
 
 # ─── AGGREGATE TOTALS ────────────────────────────────────────────────────────
 # Sum across all ECMs. Used for executive summary and percent-savings reporting.
 
 totals:
-  electricity:
+  electricity:               # (optional) omit if building has no electricity ECMs
     kwh_yr: number
     cost_usd_yr: number
     co2e_tons_yr: number
@@ -159,7 +147,7 @@ totals:
 # counterpart to the current compliance status in the building profile.
 # Only include jurisdictions where the building has an active obligation.
 
-regulatory_impact:
+regulatory_impact:         # (optional)
   - jurisdiction: string
     law: string
     periods:
