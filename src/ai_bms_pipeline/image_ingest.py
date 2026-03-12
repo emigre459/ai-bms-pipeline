@@ -562,6 +562,26 @@ def _normalize_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     return snapshot
 
 
+_HEATING_MONTHS = {12, 1, 2}
+_COOLING_MONTHS = {6, 7, 8}
+
+
+def _season_from_timestamp(timestamp: Any) -> str | None:
+    """Derive season from timestamp month per schema definition:
+    heating=Dec-Feb, cooling=Jun-Aug, shoulder=Mar-May/Sep-Nov."""
+    if not isinstance(timestamp, str):
+        return None
+    try:
+        month = _parse_timezone_aware_timestamp(timestamp).month
+    except (ValueError, AttributeError):
+        return None
+    if month in _HEATING_MONTHS:
+        return "heating"
+    if month in _COOLING_MONTHS:
+        return "cooling"
+    return "shoulder"
+
+
 def _coerce_snapshot_shape(snapshot: dict[str, Any]) -> None:
     # Normalize conditions aliases and required keys.
     conditions = snapshot.get("conditions")
@@ -578,7 +598,7 @@ def _coerce_snapshot_shape(snapshot: dict[str, Any]) -> None:
     snapshot["conditions"] = {
         "oat_f": conditions.get("oat_f"),
         "rh_pct": conditions.get("rh_pct"),
-        "season": conditions.get("season"),
+        "season": _season_from_timestamp(snapshot.get("timestamp")),
     }
 
     # Ensure required nested air_system blocks are present.
@@ -980,6 +1000,7 @@ def extract_bms_snapshots(
 ) -> list[dict[str, Any]]:
     api_client = _get_client(client)
     media_type, image_data = _encode_image_for_api(image_path)
+    schema_text = _load_schema_text(schema_path)
     snapshot_schema = yaml_to_anthropic_json_schema(schema_path)
     request_schema = _compact_snapshot_payload_schema()
     request_messages = [
@@ -1006,10 +1027,12 @@ def extract_bms_snapshots(
                         "Do not map indoor/equipment temperatures to outdoor temperature. "
                         "Treat BAS and BMS as equivalent where needed. "
                         "For each snapshot item, set snapshot_json to a JSON-stringified object "
-                        "matching the full BMS snapshot structure with these exact top-level keys: "
-                        "building_id, timestamp, conditions, air_systems, heating_plant, cooling_plant, zones, anomalies. "
+                        "using EXACTLY the key names defined in the schema below — do not rename, "
+                        "nest, or restructure fields. Map all visible values to the closest matching "
+                        "schema key; place data that has no matching key in notes or anomalies. "
                         "Do not output alternate objects like alarm/event summaries. "
-                        f"If building id is unclear, use {building_id_hint or Path(image_path).stem}."
+                        f"If building id is unclear, use {building_id_hint or Path(image_path).stem}.\n\n"
+                        f"Schema (authoritative key names):\n{schema_text}"
                     ),
                 },
             ],
