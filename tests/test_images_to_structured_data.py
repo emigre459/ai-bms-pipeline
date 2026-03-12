@@ -159,4 +159,4 @@ def test_directory_input_is_processed_recursively(
         "b1/2026-03-10T11_00_00+00_00.JSON",
         "b1/2026-03-10T11_00_00+00_01.JSON",
     }
-    assert tqdm_calls["count"] == 1
+    assert tqdm_calls["count"] == 2

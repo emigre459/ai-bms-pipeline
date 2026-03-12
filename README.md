@@ -22,7 +22,7 @@ Run the end-to-end pipeline example with:
 uv run scripts/pipeline_example.py
 ```
 
-This script (which should take around X minutes to complete) runs both pipeline stages on a demo set of inputs:
+This script (which should take around 3-5 minutes to complete) runs both pipeline stages on a demo set of inputs:
 
 - **Stage 1** — sends each image to the Claude API and extracts a structured BMS snapshot JSON for each timestamp of data observed in the image. This may result in 0 JSONs being output (when no useful data are observed), 1, or as many as there are timestamps (e.g. an alerts summary page may show 10 alerts each with a different timestamp, resulting in 10 JSON files).
 - **Stage 2** — analyses each building's snapshots to identify energy conservation measures (ECMs) and estimate savings as well as next steps and considerations for the customer.

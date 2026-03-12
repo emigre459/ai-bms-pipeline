@@ -103,75 +103,102 @@ def run(
     input_images = _resolve_input_images(resolved_input)
     is_directory_input = resolved_input.is_dir()
 
-    def _process_image(image_path: Path) -> list[Path]:
-        local_written: list[Path] = []
-        if classify_only:
-            payload = image_ingest.is_bms_screenshot(
-                image_path,
+    written_paths: list[Path] = []
+    classifier_by_path: dict[Path, dict] = {}
+
+    # ── Phase 1: Classify ──────────────────────────────────────────────────────
+    if not skip_classify:
+
+        def _do_classify(image_path: Path) -> tuple[Path, dict]:
+            return image_path, image_ingest.is_bms_screenshot(
+                image_path=image_path,
                 schema_path=resolved_schema,
                 model=model,
             )
-            is_viable = bool(payload.get("is_bms_screenshot", False))
-            if not is_viable:
-                logger.error("Image classified as not viable: %s", image_path)
-            bms_indicator = "" if is_viable else "not "
-            print(f"{image_path.name}: {bms_indicator}BMS image")
-            local_written.append(_write_output(resolved_output, image_path, payload))
-            return local_written
+
+        if is_directory_input:
+            with ThreadPoolExecutor(
+                max_workers=image_ingest.MAX_CONCURRENT_LLM_TASKS
+            ) as pool:
+                futures = {pool.submit(_do_classify, p): p for p in input_images}
+                for future in tqdm(
+                    as_completed(futures),
+                    total=len(futures),
+                    desc="Classifying images",
+                    unit="image",
+                ):
+                    path, result = future.result()
+                    classifier_by_path[path] = result
         else:
-            classifier: dict | None = None
-            is_viable = True
-            if not skip_classify:
-                classifier = image_ingest.is_bms_screenshot(
-                    image_path=image_path,
-                    schema_path=resolved_schema,
-                    model=model,
-                )
-                is_viable = bool(classifier.get("is_bms_screenshot", False))
+            for image_path in tqdm(
+                input_images, desc="Classifying images", unit="image"
+            ):
+                path, result = _do_classify(image_path)
+                classifier_by_path[path] = result
+
+        if classify_only:
+            for image_path in input_images:
+                clf = classifier_by_path[image_path]
+                is_viable = bool(clf.get("is_bms_screenshot", False))
                 if not is_viable:
                     logger.error("Image classified as not viable: %s", image_path)
-                    return local_written
+                bms_indicator = "" if is_viable else "not "
+                print(f"{image_path.name}: {bms_indicator}BMS image")
+                written_paths.append(_write_output(resolved_output, image_path, clf))
+            return written_paths
 
-            hint = image_ingest.derive_building_id_hint(
-                image_path=image_path,
-                image_root=resolved_input if resolved_input.is_dir() else None,
-            )
-            snapshots = image_ingest.extract_bms_snapshots(
-                image_path=image_path,
-                building_id_hint=hint,
-                schema_path=resolved_schema,
-                model=model,
-            )
-            for payload in snapshots:
-                if classifier is not None:
-                    payload["classifier"] = classifier
-                local_written.append(_write_snapshot_output(resolved_output, payload))
-            return local_written
+        viable_images = [
+            p
+            for p in input_images
+            if classifier_by_path[p].get("is_bms_screenshot", False)
+        ]
+        for p in input_images:
+            if not classifier_by_path[p].get("is_bms_screenshot", False):
+                logger.error("Image classified as not viable: %s", p)
+    else:
+        viable_images = list(input_images)
 
-    written_paths: list[Path] = []
+    # ── Phase 2: Extract BMS data from viable images ───────────────────────────
+    def _do_extract(image_path: Path) -> list[Path]:
+        hint = image_ingest.derive_building_id_hint(
+            image_path=image_path,
+            image_root=resolved_input if is_directory_input else None,
+        )
+        snapshots = image_ingest.extract_bms_snapshots(
+            image_path=image_path,
+            building_id_hint=hint,
+            schema_path=resolved_schema,
+            model=model,
+        )
+        clf = classifier_by_path.get(image_path)
+        local_written: list[Path] = []
+        for payload in snapshots:
+            if clf is not None:
+                payload["classifier"] = clf
+            local_written.append(_write_snapshot_output(resolved_output, payload))
+        return local_written
+
     if is_directory_input:
         with ThreadPoolExecutor(
             max_workers=image_ingest.MAX_CONCURRENT_LLM_TASKS
         ) as pool:
             futures = {
-                pool.submit(_process_image, image_path): idx
-                for idx, image_path in enumerate(input_images)
+                pool.submit(_do_extract, p): idx for idx, p in enumerate(viable_images)
             }
             by_index: dict[int, list[Path]] = {}
             for future in tqdm(
                 as_completed(futures),
                 total=len(futures),
-                desc="Processing images",
+                desc="Extracting BMS data",
                 unit="image",
             ):
                 idx = futures[future]
                 by_index[idx] = future.result()
-            for idx in sorted(by_index):
-                written_paths.extend(by_index[idx])
-        return written_paths
-
-    for image_path in input_images:
-        written_paths.extend(_process_image(image_path))
+        for idx in sorted(by_index):
+            written_paths.extend(by_index[idx])
+    else:
+        for image_path in tqdm(viable_images, desc="Extracting BMS data", unit="image"):
+            written_paths.extend(_do_extract(image_path))
 
     return written_paths
 

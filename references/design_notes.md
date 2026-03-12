@@ -17,10 +17,17 @@ Why classifier outputs can be flaky in this version:
 In truth, the classifier is a very rough "first filter" but can result in structured data that is essentially all nulls when returns a false positive. The analysis stage is useful as it runs a secondary effective filter based on the structured results (e.g. more than X nulls will result in it assuming the original image was not operationally-relevant and that it is a false positive from stage 1).
 
 ### BMS Image Data Extractor
-While this is using a response schema structure to guarantee valid output compared to the original schema provided, I have not had time to 
+While this is using a response schema structure to guarantee valid output compared to the original schema provided, I have not had time to validate a meaningfully-sized set of the inputs against their extracted data. Additionally, there is a bug in the current code that makes it error out the full image data extraction step at about 49% completion which I have yet to debug (although I have added enough error checking since then that it may be a non-issue).
+
+## Stage 2
+
+As in the preceding stage, there is work to be done to determine the consistency and quality of the ECMs being generated at this step. Enough deterministic calculations/calculation checks are being done for the numeric fields that I am reasonably confident in them, but my lack of commercial building EE domain expertise made it difficult to determine how accurate each analysis was. The model was directed to the domain knowledge content distilled (in `analysis_domains.md`) from the original task description such that it likely did a decent job adhering to those concepts and some very basic spot checks indicate alignment, but there is a lot more work that would need to be done to validate these findings. 
 
 
 # What this could become with more time
+## General
+Overall, it would be beneficial to have ground truth about various building parameters (e.g. known location, known size, number of floors, etc.) that would enable much more granular LLM-generated data checks to protect against hallucinations or wild speculation. There is also the potential to treat uncertainty/confidence in our findings with this pipeline based on "evidence quality". The LLMs are already generating confidence estimates for the generated ECMs using data observability and should continue to do so: if all the data necessary for a finding can be directly observed in a BMS screenshot (or series of screenshots when the building ID is well-known to be the same for all of them), then high confidence is warranted. If findings rely in part on data assumptions (e.g. no OAT visible in a screenshot but day and time can provide a daily average temperature for the area), then a medium level of confidence is possible. If multiple points of inference or estimation are required for a finding to be valid, we can safely categorize it as low-confidence.
+
 ## Stage 1
 ### BMS Image Classifier
 Known ways to improve classifier reliability:
