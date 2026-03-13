@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1360" height="480" viewBox="0 0 1360 480">
+  <rect width="1360" height="480" fill="#1a1a1a"/>
+
+  <!-- ── Module boundary ── -->
+  <rect x="230" y="50" width="960" height="360" rx="5" fill="none" stroke="#3a3a3a" stroke-width="1.5"/>
+  <text x="242" y="70" fill="#666" font-family="ui-monospace, monospace" font-size="13">analysis</text>
+
+  <!-- ══════════════════════════════════════════════ -->
+  <!-- Inputs box -->
+  <rect x="20" y="170" width="186" height="90" rx="5" fill="#272727" stroke="#484848" stroke-width="1"/>
+  <text x="113" y="204" text-anchor="middle" fill="#d4d4d4" font-family="ui-monospace, monospace" font-size="12">data/extracted_from_images/</text>
+  <text x="113" y="224" text-anchor="middle" fill="#888" font-family="ui-monospace, monospace" font-size="11">&lt;building_id&gt;/</text>
+  <text x="113" y="242" text-anchor="middle" fill="#888" font-family="ui-monospace, monospace" font-size="11">*.JSON</text>
+
+  <!-- arrow: inputs → load_all_buildings -->
+  <line x1="206" y1="215" x2="258" y2="215" stroke="#555" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- load_all_buildings -->
+  <rect x="259" y="192" width="160" height="46" rx="4" fill="#272727" stroke="#484848" stroke-width="1"/>
+  <text x="339" y="221" text-anchor="middle" fill="#d4d4d4" font-family="ui-monospace, monospace" font-size="12">load_all_buildings</text>
+
+  <!-- arrow: load → filter -->
+  <line x1="419" y1="215" x2="462" y2="215" stroke="#555" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- _filter_useful_snapshots -->
+  <rect x="463" y="192" width="186" height="46" rx="4" fill="#272727" stroke="#484848" stroke-width="1"/>
+  <text x="556" y="221" text-anchor="middle" fill="#d4d4d4" font-family="ui-monospace, monospace" font-size="12">_filter_useful_snapshots</text>
+
+  <!-- "skip" branch downward from filter -->
+  <line x1="556" y1="238" x2="556" y2="295" stroke="#555" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="562" y="275" fill="#777" font-family="ui-sans-serif, sans-serif" font-size="11" font-style="italic">insufficient data</text>
+
+  <!-- skip box -->
+  <rect x="487" y="296" width="138" height="36" rx="4" fill="#1e1e1e" stroke="#3a3a3a" stroke-width="1" stroke-dasharray="4 3"/>
+  <text x="556" y="319" text-anchor="middle" fill="#666" font-family="ui-monospace, monospace" font-size="12">skip + log warning</text>
+
+  <!-- label "yes" on main path -->
+  <text x="660" y="208" fill="#777" font-family="ui-sans-serif, sans-serif" font-size="11" font-style="italic">passes</text>
+
+  <!-- arrow: filter → run_deterministic_checks -->
+  <line x1="649" y1="215" x2="692" y2="215" stroke="#555" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- ── Deterministic checks box ── -->
+  <rect x="693" y="160" width="196" height="46" rx="4" fill="#272727" stroke="#484848" stroke-width="1"/>
+  <text x="791" y="189" text-anchor="middle" fill="#d4d4d4" font-family="ui-monospace, monospace" font-size="12">run_deterministic_checks</text>
+  <!-- "deterministic" label -->
+  <text x="791" y="154" text-anchor="middle" fill="#5a8a5a" font-family="ui-sans-serif, sans-serif" font-size="10" font-style="italic">deterministic</text>
+
+  <!-- arrow down: filter passes snapshots also to analyze_building -->
+  <!-- snapshots path: goes along y=215 past deterministic box, curves down to analyze_building -->
+  <line x1="649" y1="215" x2="649" y2="280" stroke="#555" stroke-width="1.5"/>
+  <line x1="649" y1="280" x2="889" y2="280" stroke="#555" stroke-width="1.5" stroke-dasharray="0"/>
+  <!-- (continues to analyze_building below) -->
+
+  <!-- arrow: deterministic findings down to analyze_building -->
+  <line x1="791" y1="206" x2="791" y2="280" stroke="#555" stroke-width="1.5"/>
+  <text x="797" y="250" fill="#777" font-family="ui-sans-serif, sans-serif" font-size="11" font-style="italic">findings</text>
+
+  <!-- ── analyze_building (LLM) ── -->
+  <rect x="890" y="257" width="155" height="46" rx="4" fill="#2a2a35" stroke="#5555a0" stroke-width="1.5"/>
+  <text x="967" y="284" text-anchor="middle" fill="#c8c8e8" font-family="ui-monospace, monospace" font-size="12">analyze_building</text>
+  <text x="967" y="299" text-anchor="middle" fill="#8888cc" font-family="ui-sans-serif, sans-serif" font-size="10">LLM synthesis</text>
+
+  <!-- snapshots arrive at analyze_building -->
+  <line x1="889" y1="280" x2="890" y2="280" stroke="#555" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- Config box below analyze_building -->
+  <rect x="895" y="335" width="145" height="52" rx="4" fill="#272727" stroke="#484848" stroke-width="1"/>
+  <text x="967" y="354" text-anchor="middle" fill="#888" font-family="ui-sans-serif, sans-serif" font-size="10">Config</text>
+  <text x="967" y="374" text-anchor="middle" fill="#aaa" font-family="ui-monospace, monospace" font-size="11">analysis_domains.md</text>
+  <!-- arrow: config up to analyze_building -->
+  <line x1="967" y1="335" x2="967" y2="303" stroke="#444" stroke-width="1" marker-end="url(#arr)"/>
+
+  <!-- arrow: analyze_building → ecm_expansion -->
+  <line x1="1045" y1="280" x2="1090" y2="280" stroke="#555" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="1060" y="272" fill="#777" font-family="ui-sans-serif, sans-serif" font-size="11" font-style="italic">flat ECMs</text>
+
+  <!-- ── ECM expansion box ── -->
+  <rect x="1091" y="257" width="152" height="46" rx="4" fill="#272727" stroke="#484848" stroke-width="1"/>
+  <text x="1167" y="278" text-anchor="middle" fill="#d4d4d4" font-family="ui-monospace, monospace" font-size="11">ecm_savings_block</text>
+  <text x="1167" y="295" text-anchor="middle" fill="#d4d4d4" font-family="ui-monospace, monospace" font-size="11">aggregate_totals</text>
+  <!-- "deterministic" label -->
+  <text x="1167" y="253" text-anchor="middle" fill="#5a8a5a" font-family="ui-sans-serif, sans-serif" font-size="10" font-style="italic">deterministic</text>
+
+  <!-- arrow: expansion → output -->
+  <line x1="1243" y1="280" x2="1282" y2="280" stroke="#555" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- ── Output box ── -->
+  <rect x="1283" y="192" width="57" height="176" rx="5" fill="#272727" stroke="#484848" stroke-width="1"/>
+  <!-- rotated text for output -->
+  <text transform="translate(1311,370) rotate(-90)" text-anchor="start" fill="#d4d4d4" font-family="ui-monospace, monospace" font-size="11">data/analyses/</text>
+  <text transform="translate(1325,355) rotate(-90)" text-anchor="start" fill="#888" font-family="ui-monospace, monospace" font-size="11">&lt;building_id&gt;.json</text>
+
+  <!-- ── Arrow marker definition ── -->
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#555"/>
+    </marker>
+  </defs>
+</svg>

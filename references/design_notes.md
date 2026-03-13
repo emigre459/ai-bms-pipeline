@@ -8,6 +8,11 @@ Two pipeline stages run in sequence:
 
 A key structural decision: the LLM produces flat ECM fields (energy quantities + enums only); code then deterministically expands them into the nested savings/implementation/totals structure and recomputes all cost and carbon figures from `DEFAULT_FACTORS`. This keeps arithmetic auditable and independent of LLM variation.
 
+Conceptual diagrams of how the stages work are shown below:
+
+![Stage 1 diagram](stage1_diagram.png)
+![Stage 2 diagram](stage2_diagram.svg)
+
 
 # Key Tradeoffs
 
