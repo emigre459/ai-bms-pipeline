@@ -1,63 +1,79 @@
-# Purpose
+# Architecture
 
-Herein I document the various decisions, tradeoffs, and considerations associated with the buildout of this pipeline. Please see below the various discussion points requested.
+Two pipeline stages run in sequence:
 
+**Stage 1 — Image → JSON:** Each BMS screenshot passes a classifier call (`is_bms_screenshot`) that filters out irrelevant images. Images that pass are sent to an extraction call that populates `bms-snapshot.schema.yaml`. A data-quality score at analysis time acts as a secondary gate, discarding extractions with too many null fields before they reach the LLM.
 
-# Key Tradeoffs Made
-## Stage 1 
-### BMS Image Classifier
+**Stage 2 — JSON → Analysis:** Per-building snapshots feed a deterministic rule engine that flags specific measurable patterns (HWS temperature vs. OAT, fan speed imbalance, economizer state, simultaneous heating/cooling, out-of-schedule operation, static pressure, supply air temperature). These findings are passed as grounded evidence to an LLM synthesis call that produces the full `analysis-output.schema.yaml` payload: ECMs, key findings, priority actions, and open questions.
 
-The current image classifier gate (`is_bms_screenshot`) is intentionally kept simple because this project is a prototype focused on proving end-to-end viability (image -> structured extraction) rather than maximizing classifier precision/recall in production.
-
-Why classifier outputs can be flaky in this version:
-- The gate is a single LLM vision decision on a fuzzy boundary (what counts as "BMS-relevant").
-- Borderline screenshots (partial UI, floor plans, weak telemetry context, blurry captures) are inherently ambiguous.
-- There is no confidence calibration layer or deterministic pre-filter before the LLM call.
-
-In truth, the classifier is a very rough "first filter" but can result in structured data that is essentially all nulls when returns a false positive. The analysis stage is useful as it runs a secondary effective filter based on the structured results (e.g. more than X nulls will result in it assuming the original image was not operationally-relevant and that it is a false positive from stage 1).
-
-### BMS Image Data Extractor
-While this is using a response schema structure to guarantee valid output compared to the original schema provided, I have not had time to validate a meaningfully-sized set of the inputs against their extracted data. Additionally, there is a bug in the current code that makes it error out the full image data extraction step at about 49% completion which I have yet to debug (although I have added enough error checking since then that it may be a non-issue).
-
-## Stage 2
-
-As in the preceding stage, there is work to be done to determine the consistency and quality of the ECMs being generated at this step. Enough deterministic calculations/calculation checks are being done for the numeric fields that I am reasonably confident in them, but my lack of commercial building EE domain expertise made it difficult to determine how accurate each analysis was. The model was directed to the domain knowledge content distilled (in `analysis_domains.md`) from the original task description such that it likely did a decent job adhering to those concepts and some very basic spot checks indicate alignment, but there is a lot more work that would need to be done to validate these findings. 
+A key structural decision: the LLM produces flat ECM fields (energy quantities + enums only); code then deterministically expands them into the nested savings/implementation/totals structure and recomputes all cost and carbon figures from `DEFAULT_FACTORS`. This keeps arithmetic auditable and independent of LLM variation.
 
 
-# What this could become with more time
+# Key Tradeoffs
+
+## Stage 1: Classifier
+
+The classifier is a single LLM call making a boolean decision on inherently ambiguous input — intentionally simple for a prototype focused on end-to-end viability rather than production precision/recall.
+
+Known limitations:
+- Borderline screenshots (partial UI, floor plans, blurry captures) sit on a fuzzy boundary; there is no confidence calibration or deterministic pre-filter before the LLM call
+- False positives pass sparse images downstream where they are caught only by the data-quality score at analysis time, wasting extraction tokens in between
+
+## Stage 1: Data Extraction
+
+`output_config` JSON schema enforcement constrains the LLM's response structure, but not semantic correctness — the model could return plausible-looking values that don't match what is actually on screen. A labeled validation set from expert review would be needed to quantify this.
+
+Two schema-level decisions worth noting:
+- The compact snapshot format (each snapshot serialized as a JSON string inside an array item) was required to work around grammar size limits in Anthropic's structured output engine when using deeply nested schemas
+- Allowable values for constrained fields (season, mode, control_source) live as YAML inline comments rather than explicit lists — functional for a prototype but not machine-enforceable at write time
+
+## Stage 2: Analysis
+
+The deterministic pre-checks ground the LLM on the most measurable patterns, which reduces hallucination risk for those findings. More qualitative observations (scheduling intent, recommissioning, ventilation) are inherently more speculative, and ECM confidence is labeled accordingly.
+
+Energy factors use US commercial averages as defaults. Building-specific utility rates would meaningfully improve cost and carbon estimates.
+
+
+# What I Would Do Differently With More Time
+
+## Stage 1: Classifier
+
+- Move from boolean output to `label + confidence + evidence`; set threshold by risk preference (high recall is preferable here — dropping a valid BMS image is costlier than passing a borderline one)
+- Add deterministic pre-checks (OCR + HVAC keyword/units scoring) before the LLM call to reduce unnecessary API spend
+- Build a labeled eval set; use prompt optimization tooling like [DSPy](https://dspy.ai/) to systematically improve recall on borderline cases with minimal labeled examples
+- Add a low-confidence routing path (retry, alternate model, or human review queue) rather than a hard binary decision
+
+## Stage 1: Data Extraction
+
+- Expert analyst spot-checks to build a labeled ground-truth dataset for field-level accuracy measurement
+- Formalize allowable values for constrained fields as explicit lists in the YAML schema rather than inline comments, so schema enforcement and Pydantic validation are driven by the same source of truth
+- Move output from JSON files to a document store (MongoDB, Firestore) to enforce schema constraints at write time and support faster downstream querying
+
+## Stage 2: Analysis
+
+- RAG over company-specific, field-tested analyst findings would substantially improve the long-tail, high-value recommendations that are underrepresented in public training data
+- Ground-truth building metadata (location, size, floor count, occupancy profile) would constrain LLM speculation and enable more specific ECM sizing
+- More deterministic checks: the current rule engine covers the seven patterns in the primer, but production would benefit from additional rules as patterns are observed and validated in real data
+
 ## General
-Overall, it would be beneficial to have ground truth about various building parameters (e.g. known location, known size, number of floors, etc.) that would enable much more granular LLM-generated data checks to protect against hallucinations or wild speculation. There is also the potential to treat uncertainty/confidence in our findings with this pipeline based on "evidence quality". The LLMs are already generating confidence estimates for the generated ECMs using data observability and should continue to do so: if all the data necessary for a finding can be directly observed in a BMS screenshot (or series of screenshots when the building ID is well-known to be the same for all of them), then high confidence is warranted. If findings rely in part on data assumptions (e.g. no OAT visible in a screenshot but day and time can provide a daily average temperature for the area), then a medium level of confidence is possible. If multiple points of inference or estimation are required for a finding to be valid, we can safely categorize it as low-confidence.
+
+- A frontend (e.g. React) that traces each input image through to its output analysis would make the pipeline reviewable for non-technical users and support human-in-the-loop quality control
+- A chat interface with an expert analyst agent (web search + RAG) would let analysts and building owners interrogate findings, challenge assumptions, and propose new ECM categories on demand — the most interesting UX innovations in agentic AI tend to accelerate and augment existing workflows before defining new ones
+
+
+# Evaluating Production Readiness
 
 ## Stage 1
-### BMS Image Classifier
-Known ways to improve classifier reliability:
-- Move from boolean-only output to `label + confidence + evidence` and threshold by risk preference.
-- Add deterministic pre-checks (OCR + HVAC keyword/units scoring) before LLM classification.
-- Use stronger rubric prompts and include positive/negative few-shot examples.
-- Add self-consistency voting (multi-pass classification) for borderline cases.
-- Build a labeled eval set and tune thresholds to maximize target metrics (for this stage, likely high recall to avoid dropping valid BMS images).
-- Add a low-confidence routing path (retry, alternate prompt/model, or human review queue).
 
-### BMS Data Extraction
-- Expert analyst review and spot-checking (along with creation of a ground truth dataset) would go a long way for properly interpreting borderline data (e.g. an image that says "76.1 F" at the top of the screen with the rest of the building metadata *might* be the OAT but might not be)
-- Setting up a NoSQL database (to capture the time series and nested nature of the data being extracted) like MongoDB or Firestore to capture structured data instead of output JSON files would enable greater post-analysis speed and just generally more consistency (e.g. disallowing wrongly-typed structured data outputs from the LLM beyond the response schema constraints I'm already imposing)
-- Add allowable values (for constrained fields) as explict lists in the YAML configs instead of just capturing them as inline comments. This will allow more consistency since right now we have to rely on on-demand LLM calls (e.g. via Cursor) to populate the pydantic schemas from the YAML comments
+The classifier has no formal evaluation today — only spot checks across a small handful of positive and negative examples. The right approach is a labeled eval set (a few hundred images minimum) with precision/recall tracked at a defined threshold, and regression testing on any model or prompt change.
+
+Token efficiency is also directly measurable: the classifier false-positive rate drives wasted Stage 1 extraction calls. Tracking it is the highest-leverage near-term improvement to both cost and downstream accuracy.
 
 ## Stage 2
-- Add allowable values (for constrained fields) as explict lists in the YAML configs instead of just capturing them as inline comments. This will allow more consistency
 
-## General
-To enhance user-friendliness for both analysts and their audiences (e.g. building owners), it would make a lot of sense to add a proper front end to this system (e.g. React.ts) that enables both visualization of the pipeline steps (tracing input image to output analysis and each step in between) for human evaluation, but a chat interfacewith an expert analyst agent that includes web searching at a minimum as an agent tool. Being able to ask more information about source citations (e.g. for electricity cost data) or even throw an idea in for new savings opportunities that were never explored before (e.g. adding another element to `analysis_domains.md` and an expert agent to own it that could be called upon as needed based on the conversation). Generally speaking for agentic AI, some of the most interesting innovations yet to be realized are in the UI/UX. GitHub Copilot was such a success early on not just because it enabled "hyper autocomplete" but because it didn't try to provide value initially through a chat box alone: it provided inline support and accleration of existing workflows before helping define entirely new workflows. 
+Human expert review is the primary quality bottleneck. The deterministic checks are verifiable; the LLM narrative is not. A reasonable evaluation sequence:
+1. Have domain experts review a sample of generated analyses and score ECM plausibility, completeness, and savings estimate reasonableness
+2. Identify recurring failure modes (missing ECMs, wrong systems cited, implausible savings figures)
+3. Convert agreed-upon findings into regression test cases that can be verified deterministically via the schema validator and totals logic
 
-# Evaluating the system's production-readiness
-## General
-1. A lot of this needs to be more battle-tested. I have done spot checks of roughly 5-10 images that should be used for this pipeline (AKA they show useful building operational data) and another set of the same size that should *not* be used. Our two stages together seem to do a decent job of ignoring the irrelevant images by the point of analysis, but that's a lot of wasted tokens when our initial classifier should do a much better job much earlier and have a much lower false positive rate. 
-2. Overall, the pipeline would benefit from more evals. Where possible and obvious, I have included deterministic checks or even direct calculations of analysis outputs (e.g. for calculating electricity costs) to avoid the random nature of LLM outputs skewing results. But this is simply a starting point. My spot checks during the development process are a very rough "gut check" not a thorough "I've run this through 10,000 images meant to confuse the pipeline and it has an accuracy of 90%". 
-
-## Stage 1
-1. Regarding the classification step, this kind of computer vision problem can be reasonably well addressed by training a custom vision model on our exact task (e.g. as has been done for segmentation and classification in self-driving cars). Alternatively we could significantly improve our initial classifier using modern LLMs and a toolkit I've worked with before called [DSPy](https://dspy.ai/) that essentially serves to optimize LLM prompts using (small, 20-30 examples only) query-response pairs. Improving the initial classification step in Stage 1 would significxantly improve token usage and latency (and likely downstream accuracy as well).
-
-
-## Stage 2
-1. Given the level of domain-specificity in terms of energy efficiency recommendations required at this stage, review by a human expert analyst is crucial to better identify the blind spots in the system. The available reasoning models (with web search enabled) are very powerful indeed, but likely the real value of a product like this comes from the long tail of infrequent, but high-value recommendations that are probably poorly represented on the public Internet and in the models' training data. 
-    * Depending on the level of documentation of a company choosing to implement this pipeline, it is possible we could supercharge the quality of this project through [RAG](https://en.wikipedia.org/wiki/Retrieval-augmented_generation) tooling that enables enrichment of the process through company-specific (and private) information and analyst findings that have been field-tested with real customers.
+The deterministic pre-check layer means that for the seven rule-based patterns, correctness can be unit-tested directly against snapshot fixtures — this already exists in the test suite and should expand as new rules are added (and ideally we can set this up as new entries in a database to streamline the addition of new analysis domains we want represented as time goes on and technologies change).

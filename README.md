@@ -1,18 +1,25 @@
 # Purpose
 
-> In this exercise, you will build a prototype pipeline that ingests screenshots from real BMS interfaces, extracts structured information, and uses that information to identify potential energy efficiency opportunities.
+A prototype pipeline that ingests screenshots from Building Management System (BMS) interfaces, extracts structured operational data, and uses that data to identify potential energy efficiency opportunities.
 
 # Getting Started
 ## Setting Up Your Environment
 > [!NOTE]
 > This code was built and tested on a MacBook Pro, 14-inch, 2023 model, running MacOS Tahoe 26.2. Default terminal assumed is `bash` and code is all python. If you do not have access to a Linux/Unix-based system, please note that some of these commands may require modification. Links to multi-platform installation instructions are provided whenever possible.
 
-1. Install `pyenv` to manage python versions (instructions [here](https://github.com/pyenv/pyenv?tab=readme-ov-file#installation)). 
+1. Install `pyenv` to manage python versions (instructions [here](https://github.com/pyenv/pyenv?tab=readme-ov-file#installation)).
     * In truth, any approach that gets python 3.12.10 installed will replicate what I did here, but pyenv is a great tool to have!
 2. Install `uv` for python package management and environment replication (instructions [here](https://docs.astral.sh/uv/getting-started/installation/)).   
     * The `uv`-recommended path is to use their direct installation path via things like `curl`, but I prefer (on a Mac) to use `homebrew` (it's in the linked instructions if you want to do that too)
 3. Run `uv sync` from your terminal to ensure you get all the packages installed in a virtual environment on your machine.
 4. Create a directory `data/images/` in the repo root and put inside it the various images (including folders of images, e.g. `building-1/`) that you want to use as input. Please put all the images in there so the example script is able to find the subset it runs for a demo.
+5. Run the following command in your terminal to create a `.env` file in the repo root:
+
+   ```bash
+   echo -e "ANTHROPIC_API_KEY=api-key-here\nDEFAULT_ANTHROPIC_MODEL=claude-sonnet-4-6" > .env
+   ```
+
+    This will create a `.env` file with the required entries (replace `api-key-here` with your actual Anthropic API key before continuing).
 
 
 ## Running the code
