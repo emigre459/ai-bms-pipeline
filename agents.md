@@ -97,13 +97,20 @@ uv run pytest tests/test_analysis.py # single file
 
 ---
 
-## Claude Code Skills Available
+## Skills
 
-When using Claude Code, these `/` skills are available in this project:
+Skills follow the [Agent Skills](https://agentskills.io) open standard and live in `.claude/skills/`. They work in Claude Code and any other compatible agent tool.
 
-- `/simplify` — review changed code for quality and efficiency, then fix issues
-- `/commit` — stage, write, and create a git commit
-- `/claude-api` — guidance for working with the Anthropic SDK (this project uses `anthropic` directly)
+| Skill | Invoke | Description |
+|-------|--------|-------------|
+| `run-tests` | `/run-tests` | Runs `make tests` and reports results. Manual-only — won't auto-trigger. |
+| `pr-check` | `/pr-check` | Runs `make pr_check` (Black + tests). Use before opening a PR. Manual-only. |
+
+Bundled Claude Code skills also available: `/simplify`, `/commit`, `/claude-api`.
+
+## Hooks
+
+`.claude/settings.json` registers a `Stop` hook that runs `.claude/hooks/run-tests-on-stop.sh` at the end of every Claude turn. The script is a no-op unless Python files were modified or created; when they were, it runs `make tests`. If tests fail, it exits with code 2, which blocks Claude from finishing so it can address the failures.
 
 ---
 
